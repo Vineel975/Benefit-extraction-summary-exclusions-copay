@@ -518,6 +518,8 @@ export function ResultView({
     const nameWords   = normName.split(" ").filter(w => w.length > 3);
 
     const positionedSpans = spans.filter(s => getSpanTopPx(s) !== null);
+    console.log("[tariff-highlight] positionedSpans=", positionedSpans.length, "of", spans.length,
+      "sample span style=", spans[0]?.getAttribute("style"), "sample text=", spans[0]?.textContent?.slice(0,30));
     const allTops = [...new Set(
       positionedSpans.map(s => getSpanTopPx(s)).filter(t => t !== null) as number[]
     )].sort((a, b) => a - b);
@@ -541,6 +543,13 @@ export function ResultView({
       });
     };
 
+    // Detect Excel-converted PDFs by tariff filename
+    const isExcelPdf = !!(tariffFileNameProp && (
+      tariffFileNameProp.toLowerCase().endsWith(".xlsx") ||
+      tariffFileNameProp.toLowerCase().endsWith(".xls")
+    ));
+    console.log("[tariff-highlight] isExcelPdf=", isExcelPdf, "tariffFileName=", tariffFileNameProp);
+
     // STRATEGY A: pdfText direct search via DOM spans (text-based PDFs)
     // For Excel-converted PDFs, also try matching by highlightName (procedure name)
     const searchTarget = highlightText || highlightName || "";
@@ -557,6 +566,7 @@ export function ResultView({
         }
         // Lower threshold for Excel PDFs — 1 strong keyword match is enough
         const threshold = isExcelPdf ? 1 : Math.min(2, searchWords.length);
+        console.log("[tariff-highlight] Strategy A: searchTarget=", searchTarget, "words=", searchWords, "bestHits=", bestHits, "threshold=", threshold, "bestSpan text=", bestSpan?.textContent);
         if (bestSpan && bestHits >= threshold) {
           highlightLine(getSpanTopPx(bestSpan)!);
           pendingHighlightRef.current = null;
@@ -568,7 +578,6 @@ export function ResultView({
     // STRATEGY B: use AI-provided row coordinates (pdfRowTopPct/pdfRowBottomPct) to draw
     // a canvas overlay. This works for scanned PDFs with no embedded text.
     // Skip for Excel-converted PDFs — they have proper text layers, use Strategy A instead.
-    const isExcelPdf = tariffFileNameProp && (tariffFileNameProp.toLowerCase().endsWith(".xlsx") || tariffFileNameProp.toLowerCase().endsWith(".xls"));
     if (!isExcelPdf && rowTopPct && rowBottomPct && rowTopPct > 0) {
       console.log("[tariff-highlight] Strategy B: using AI coordinates", rowTopPct, rowBottomPct);
       const canvas = targetWrapper.querySelector("canvas") as HTMLCanvasElement | null;
