@@ -1,1768 +1,1149 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import {
-  ResizablePanelGroup,
-  ResizablePanel,
-  ResizableHandle,
-} from "@/components/ui/resizable";
-import { cn } from "@/lib/utils";
-import { tabsListVariants } from "@/components/ui/tabs";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import type { ProcessingState } from "@/src/processing-service";
-import type { ExtractionResult, PdfAnalysis, TariffBreakdownItem } from "@/src/types";
-import { ChangeLog } from "@/src/changelog";
-import { computeClaimCalculation } from "@/src/claim-calculation";
-import { ProcessingLogs } from "./result-view/processing-logs";
-import { pdfjs } from "./pdf-viewer";
-import { PdfViewerPanel } from "./result-view/pdf-viewer-panel";
-import { PatientInfoTab } from "./result-view/tabs/patient-info-tab";
-import { MedicalAdmissibilityTab } from "./result-view/tabs/medical-admissibility-tab";
-import { FinancialSummaryTab } from "./result-view/tabs/financial-summary-tab";
-import { useMutation as useConvexMutation } from "convex/react";
-import { api } from "@/convex/_generated/api";
-import { ChevronDown, Save } from "lucide-react";
+import type { ClaimCalculationResult } from "@/src/claim-calculation";
+import type {
+  BSIData,
+  EyeType,
+  HospitalBillBreakdownItem,
+  LensTypeApproval,
+  TariffBreakdownItem,
+} from "@/src/types";
 
-function getBasename(filePath: string): string {
-  const parts = filePath.split(/[/\\]/);
-  return parts[parts.length - 1] || filePath;
-}
-
-interface ResultViewProps {
-  hospitalBill: File | string | null;
-  tariffFile: File | string | null;
+interface FinancialSummaryTabProps {
+  fileName: string;
+  claimCalculation?: ClaimCalculationResult | null;
+  financialSummaryTotals: {
+    hospitalBillAfterDiscount: number;
+    hospitalBillBeforeDiscount: number;
+    discount: number;
+    insurerPayable: number;
+  };
+  finalInsurerPayable?: number | null;
+  finalInsurerPayableNotes?: string | null;
+  formatAmountValue: (amount?: number | null) => string;
+  benefitAmount?: number | null;
+  lensType?: string | null;
+  lensTypePageNumber?: number | null;
+  lensTypeApproved?: LensTypeApproval;
+  eyeType?: EyeType | null;
+  isAllInclusivePackage: boolean;
+  tariffPageNumber?: number | null;
   tariffFileName?: string | null;
-  showSampleData: boolean;
-  state: ProcessingState | undefined;
-  isProcessing: boolean;
-  selectedFileResult: ExtractionResult | null;
-  selectedAnalysis: PdfAnalysis | null;
-  onDocumentLoadSuccess: ({ numPages }: { numPages: number }) => void;
-  onDocumentLoadError: (error: Error) => void;
-  pdfError: Error | null;
-  spectraFields?: {
-    availedAccommodationId?: string;
-    facilityOptions?: Array<{ id: string; text: string }>;
-    [key: string]: unknown;
-  } | null;
-  availedAccommodationOverride?: string;
+  tariffNotes?: string | null;
+  tariffClarificationNote?: string | null;
+  tariffExtractionItem?: TariffBreakdownItem[] | null;
+  hospitalBillBreakdown?: HospitalBillBreakdownItem[] | null;
+  hospitalBillPageNumber?: number | null;
+  onHospitalAmountClick?: (pageNumber?: number | null) => void;
+  onTariffAmountClick?: (pageNumber?: number | null, highlightText?: string, highlightName?: string, rowTopPct?: number, rowBottomPct?: number) => void;
+  /** Passed from result-view — same claimId used by benefit-plan and patient-info tabs */
+  claimId?: string;
+  /** MemberPolicyID for previous claims lookup */
+  memberPolicyId?: string;
+  /** Called when benefit plan limit is extracted from DB alignment cappings */
+  onBenefitPlanLimitExtracted?: (limit: number | null, note: string) => void;
+  dbBenefitPlanLimit?: number | null;
+  /** Called when user edits claimed/tariff amounts so parent can use updated approved amount */
+  onAmountsChange?: (claimedAmount: number | null, tariffAmount: number | null, approvedAmount: number | null) => void;
+  /** Called when user clicks Benefit extraction section — opens Benefit Plan tab on right */
+  onBenefitExtractionClick?: () => void;
+  /** Current diagnosis text — used to filter benefit extraction points */
+  diagnosis?: string | null;
 }
 
-// ── Save split-button with dropdown ──────────────────────────────────────────
-function SaveDropdown({
-  onSave,
-  onSaveAndRaiseQuery,
-  onDontSaveAndRaiseQuery,
-  isSaving,
-}: {
-  onSave: () => void;
-  onSaveAndRaiseQuery: () => void;
-  onDontSaveAndRaiseQuery: () => void;
-  isSaving: boolean;
-}) {
-  const [open, setOpen] = useState(false);
+export function FinancialSummaryTab({
+  claimCalculation,
+  financialSummaryTotals,
+  finalInsurerPayable,
+  finalInsurerPayableNotes,
+  onBenefitPlanLimitExtracted,
+  dbBenefitPlanLimit,
+  formatAmountValue,
+  benefitAmount,
+  lensType,
+  lensTypePageNumber,
+  lensTypeApproved,
+  isAllInclusivePackage,
+  tariffFileName,
+  tariffNotes,
+  tariffClarificationNote,
+  tariffExtractionItem,
+  hospitalBillBreakdown,
+  hospitalBillPageNumber,
+  onHospitalAmountClick,
+  tariffPageNumber,
+  onTariffAmountClick,
+  claimId,
+  memberPolicyId,
+  onAmountsChange,
+  onBenefitExtractionClick,
+  diagnosis,
+}: FinancialSummaryTabProps) {
 
-  return (
-    <div className="relative flex w-full">
-      {/* Main Save button */}
-      <Button
-        type="button"
-        disabled={isSaving}
-        onClick={onSave}
-        className="flex-1 rounded-r-none !border-emerald-700 !bg-emerald-600 !text-white hover:!bg-emerald-700"
-      >
-        <Save className="mr-1.5 h-4 w-4" />
-        {isSaving ? "Saving..." : "Save"}
-      </Button>
+  // ── BSI state — fetched client-side via /api/bsi (runs on localhost:3000) ──
+  const [bsiData, setBsiData] = useState<BSIData | null>(null);
+  const [bsiLoading, setBsiLoading] = useState(false);
+  const [bsiError, setBsiError] = useState<string | null>(null);
+  const [alignmentCappings, setAlignmentCappings] = useState<string[]>([]);
 
-      {/* Chevron dropdown trigger */}
-      <button
-        type="button"
-        disabled={isSaving}
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center justify-center rounded-r-md border-l border-emerald-700 bg-emerald-600 px-2 text-white hover:bg-emerald-700 disabled:opacity-50"
-        aria-label="More save options"
-      >
-        <ChevronDown className="h-4 w-4" />
-      </button>
-
-      {/* Dropdown menu */}
-      {open && (
-        <>
-          {/* Click-outside overlay */}
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setOpen(false)}
-          />
-          <div className="absolute bottom-full left-0 z-50 mb-1 w-56 rounded-md border border-border bg-background shadow-lg">
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 px-3 py-2.5 text-sm hover:bg-muted"
-              onClick={() => { setOpen(false); onSaveAndRaiseQuery(); }}
-            >
-              <Save className="h-4 w-4 text-emerald-600" />
-              Save and raise query
-            </button>
-            <div className="mx-3 border-t border-border" />
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 px-3 py-2.5 text-sm hover:bg-muted"
-              onClick={() => { setOpen(false); onDontSaveAndRaiseQuery(); }}
-            >
-              <ChevronDown className="h-4 w-4 text-amber-500" />
-              Don&apos;t save and raise query
-            </button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-export function ResultView({
-  hospitalBill,
-  tariffFile,
-  showSampleData,
-  state,
-  isProcessing,
-  selectedFileResult,
-  selectedAnalysis,
-  onDocumentLoadSuccess,
-  onDocumentLoadError,
-  pdfError,
-  tariffFileName: tariffFileNameProp,
-  spectraFields,
-  availedAccommodationOverride,
-}: ResultViewProps) {
-  const updateResult = useConvexMutation(api.processing.updateResult);
-  const pdfContainerRef = useRef<HTMLDivElement | null>(null);
-  const [pdfWidth, setPdfWidth] = useState<number>(800);
-  const [activePdfFile, setActivePdfFile] = useState<
-    "hospital" | "tariff" | "benefitPlan"
-  >("hospital");
-  const [pdfPages, setPdfPages] = useState<{
-    hospital: number;
-    tariff: number;
-  }>({
-    hospital: 0,
-    tariff: 0,
-  });
-  // Per-page rotation state: key = pageIndex, value = 0|90|180|270
-  const [pageRotations, setPageRotations] = useState<Record<number, number>>({});
-  // Per-page zoom state: key = pageIndex, value = scale factor (default 1.0)
-  const [pageZooms, setPageZooms] = useState<Record<number, number>>({});
-  // Tracks the last populated ICD code from the Diagnosis-Linked section
-  const [lastIcdCodeFromTab, setLastIcdCodeFromTab] = useState<string>("");
-  const rotatePage = useCallback((pageIndex: number, direction: "cw" | "ccw") => {
-    setPageRotations((prev) => ({
-      ...prev,
-      [pageIndex]: ((prev[pageIndex] ?? 0) + (direction === "cw" ? 90 : -90) + 360) % 360,
-    }));
-  }, []);
-
-  const zoomPage = useCallback((pageIndex: number, direction: "in" | "out") => {
-    setPageZooms((prev) => {
-      const current = prev[pageIndex] ?? 1.0;
-      const next = direction === "in"
-        ? Math.min(current + 0.25, 3.0)
-        : Math.max(current - 0.25, 0.5);
-      return { ...prev, [pageIndex]: Math.round(next * 100) / 100 };
-    });
-  }, []);
-
-  // Inject rotation buttons onto each react-pdf Page via DOM observation
-  useEffect(() => {
-    const container = pdfContainerRef.current;
-    if (!container) return;
-
-    const addButtons = () => {
-      const pages = container.querySelectorAll<HTMLElement>(".react-pdf__Page");
-      pages.forEach((page, idx) => {
-        if (page.querySelector(".claimai-rotate-btn")) return; // already added
-        const wrapper = document.createElement("div");
-        wrapper.className = "claimai-rotate-btn";
-        wrapper.style.cssText = "position:absolute;top:6px;right:6px;z-index:10;display:flex;gap:4px;opacity:0;transition:opacity .15s;pointer-events:none;";
-        page.style.position = "relative";
-
-        const pageLabel = document.createElement("span");
-        pageLabel.textContent = `P${idx + 1}`;
-        pageLabel.style.cssText = "background:rgba(0,0,0,.5);color:#fff;font-size:10px;border-radius:3px;padding:2px 5px;display:flex;align-items:center;";
-        wrapper.appendChild(pageLabel);
-
-        const makBtn = (label: string, dir: "cw" | "ccw") => {
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.title = dir === "cw" ? "Rotate clockwise" : "Rotate counter-clockwise";
-          btn.innerHTML = dir === "cw"
-            ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/></svg>`
-            : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-.49-4.55"/></svg>`;
-          btn.style.cssText = "background:rgba(0,0,0,.5);border:none;border-radius:3px;padding:3px;cursor:pointer;display:flex;align-items:center;justify-content:center;";
-          btn.addEventListener("click", (e) => { e.stopPropagation(); rotatePage(idx, dir); });
-          return btn;
-        };
-        wrapper.appendChild(makBtn("↺", "ccw"));
-        wrapper.appendChild(makBtn("↻", "cw"));
-
-        // Zoom buttons
-        const makZoomBtn = (label: string, dir: "in" | "out") => {
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.title = dir === "in" ? "Zoom in" : "Zoom out";
-          btn.innerHTML = dir === "in"
-            ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>`
-            : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>`;
-          btn.style.cssText = "background:rgba(0,0,0,.5);border:none;border-radius:3px;padding:3px;cursor:pointer;display:flex;align-items:center;justify-content:center;";
-          btn.addEventListener("click", (e) => { e.stopPropagation(); zoomPage(idx, dir); });
-          return btn;
-        };
-        wrapper.appendChild(makZoomBtn("−", "out"));
-        wrapper.appendChild(makZoomBtn("+", "in"));
-
-        page.appendChild(wrapper);
-        page.addEventListener("mouseenter", () => { wrapper.style.opacity = "1"; wrapper.style.pointerEvents = "auto"; });
-        page.addEventListener("mouseleave", () => { wrapper.style.opacity = "0"; wrapper.style.pointerEvents = "none"; });
-      });
-    };
-
-    // Apply CSS rotation and zoom to pages based on state
-    const applyRotations = () => {
-      const pages = container.querySelectorAll<HTMLElement>(".react-pdf__Page");
-      pages.forEach((page, idx) => {
-        const rotation = pageRotations[idx] ?? 0;
-        const zoom     = pageZooms[idx] ?? 1.0;
-        const transform = `rotate(${rotation}deg) scale(${zoom})`;
-        const canvas = page.querySelector<HTMLElement>("canvas");
-        if (canvas) { canvas.style.transform = transform; canvas.style.transformOrigin = "top left"; }
-        const inner = page.querySelector<HTMLElement>(".react-pdf__Page__canvas");
-        if (inner) { inner.style.transform = transform; inner.style.transformOrigin = "top left"; }
-      });
-    };
-
-    const observer = new MutationObserver(() => { addButtons(); applyRotations(); });
-    observer.observe(container, { childList: true, subtree: true });
-    addButtons();
-    applyRotations();
-
-    return () => observer.disconnect();
-  }, [pdfContainerRef, rotatePage, pageRotations, zoomPage, pageZooms, activePdfFile]);
-  const reportSections = useMemo(
-    () => [
-      { id: "patient", label: "Patient Info" },
-      { id: "medicalAdmissibility", label: "Medical Admissibility" },
-      { id: "financialSummary", label: "Summary" },
-    ],
-    [],
-  );
-  const [activeSection, setActiveSection] = useState(reportSections[0].id);
-  const reportScrollRef = useRef<HTMLDivElement>(null);
-  const [editedAnalysis, setEditedAnalysis] = useState<PdfAnalysis | null>(
-    null,
-  );
-  const [isSaving, setIsSaving] = useState(false);
-  const [presentingComplaint, setPresentingComplaint] = useState("");
-  const [processingRemarks,   setProcessingRemarks]   = useState("");
-  const [doctorNotes,         setDoctorNotes]         = useState("");
-  const [availedAccommodation, setAvailedAccommodation] = useState("");
-  const [dbBenefitPlanLimit, setDbBenefitPlanLimit] = useState<number | null>(null);
-  const [benefitPlanSnapshot, setBenefitPlanSnapshot] = useState<Record<string, unknown> | null>(null);
-  const changeLogRef = useRef(new ChangeLog());
-  const pendingChangesRef = useRef(new ChangeLog()); // Track pending changes separately
-  const [changeLogVersion, setChangeLogVersion] = useState(0);
-  const changeLog = changeLogRef.current;
-  const pendingChanges = pendingChangesRef.current;
-  const [logContentVisible, setLogContentVisible] = useState(true);
-  const [isLogsPanelForced, setIsLogsPanelForced] = useState(false);
-  const [logs, setLogs] = useState<Array<{ id: string; message: string }>>([]);
-  const [reviewDecision, setReviewDecision] = useState<
-    "approve" | "deny" | "query" | null
-  >(null);
-  const [isQueryDialogOpen, setIsQueryDialogOpen] = useState(false);
-  const [queryType, setQueryType] = useState("");
-  const [queryMessage, setQueryMessage] = useState("");
-  // Stores the AI-determined approved accommodation ID — computed in background
-  // when analysis loads so it's ready instantly when Save is clicked
-  const approvedAccommodationRef = useRef<string | null>(null);
-
-  // Helper to trigger re-render when changelog updates
-  const updateChangeLog = () => {
-    setChangeLogVersion((v) => v + 1);
-  };
-
-  // Helper to add pending change entry (not added to changelog until save)
-  const addChangeLogEntry = (
-    tab: string,
-    record: string,
-    field: string,
-    previousValue: string | number | null | undefined,
-    newValue: string | number | null | undefined,
-  ) => {
-    // Add to pending changes instead of changelog
-    pendingChanges.addEntry(tab, record, field, previousValue, newValue);
-    updateChangeLog();
-  };
-
-  // Set active PDF file to first available file
-  useEffect(() => {
-    if (hospitalBill && activePdfFile !== "hospital") {
-      setActivePdfFile("hospital");
-    } else if (!hospitalBill && tariffFile && activePdfFile !== "tariff") {
-      setActivePdfFile("tariff");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hospitalBill, tariffFile]);
-
-  // Consume backend debug logs directly from processing state
-  useEffect(() => {
-    if (!state?.logs) return;
-    const formatted = state.logs.map((entry, idx) => ({
-      id: `${entry.timestamp}-${idx}`,
-      message: entry.message,
-    }));
-    setLogs(formatted);
-  }, [state?.logs]);
-
-  // Initialize editedAnalysis when selectedAnalysis changes
-  // Use a ref to track the last initialized filePath to avoid resetting on re-renders
-  const lastInitializedFilePathRef = useRef<string | null>(null);
-  useEffect(() => {
-    const currentFilePath = selectedFileResult?.filePath;
-    // Only initialize if filePath changed (don't reset on re-renders with same file)
-    if (
-      selectedAnalysis &&
-      selectedFileResult &&
-      currentFilePath !== lastInitializedFilePathRef.current
-    ) {
-      setEditedAnalysis(JSON.parse(JSON.stringify(selectedAnalysis)));
-
-      // Restore changelog from saved data instead of clearing it
-      if (
-        selectedFileResult.changelogEntries &&
-        selectedFileResult.changelogEntries.length > 0
-      ) {
-        changeLog.load(selectedFileResult.changelogEntries);
-      } else {
-        changeLog.clear(); // Only clear if no saved changelog exists
-      }
-      // Clear pending changes when switching files
-      pendingChanges.clear();
-      updateChangeLog();
-      lastInitializedFilePathRef.current = currentFilePath || null;
-    }
-  }, [selectedFileResult?.filePath, selectedAnalysis, selectedFileResult]);
-
-  // Use editedAnalysis for display, fallback to selectedAnalysis
-  // This ensures all tabs use the latest edited data
-  const displayAnalysis = useMemo(() => {
-    return editedAnalysis || selectedAnalysis;
-  }, [editedAnalysis, selectedAnalysis]);
-
-  // Handler to scroll PDF to a specific page
-  const handleScrollToPage = (pageNumber: number) => {
-    if (!pdfContainerRef.current || !pageNumber || pageNumber <= 0) return;
-
-    // Ensure hospital bill is active for medical admissibility
-    if (hospitalBill) {
-      setActivePdfFile("hospital");
-    }
-
-    // Small delay to ensure PDF pages are rendered
-    setTimeout(() => {
-      if (!pdfContainerRef.current) return;
-
-      // Find the page element by its data-page-number attribute
-      const pageElements =
-        pdfContainerRef.current.querySelectorAll("[data-page-number]");
-
-      for (const el of Array.from(pageElements)) {
-        const pageNum = parseInt(
-          (el as HTMLElement).getAttribute("data-page-number") || "0",
-        );
-        if (pageNum === pageNumber) {
-          // Scroll to the page element
-          (el as HTMLElement).scrollIntoView({
-            behavior: "smooth",
-            block: "start",
-          });
-          break;
-        }
-      }
-    }, 100);
-  };
-
-  const clearTariffHighlights = () => {
-    document.querySelectorAll(".tariff-highlight").forEach((el) => {
-      const h = el as HTMLElement;
-      h.classList.remove("tariff-highlight");
-      h.style.background = "";
-      h.style.borderRadius = "";
-      h.style.outline = "";
-      h.style.mixBlendMode = "";
-    });
-    // Also remove canvas overlay highlights (Strategy B for scanned PDFs)
-    document.querySelectorAll(".tariff-highlight-overlay").forEach(el => el.remove());
-  };
-
-  // Clear highlights when clicking anywhere outside the tariff rows
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      // If click is NOT inside a tariff row (green card) or the PDF panel, clear
-      if (!target.closest(".tariff-row-clickable") && !target.closest(".react-pdf__Page__textContent")) {
-        clearTariffHighlights();
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  // Pending highlight request — survives re-renders caused by setActivePdfFile
-  const pendingHighlightRef = useRef<{ pageNumber: number; highlightText?: string; highlightName?: string; rowTopPct?: number; rowBottomPct?: number } | null>(null);
-  const highlightAttemptsRef = useRef(0);
-  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const runHighlight = () => {
-    const req = pendingHighlightRef.current;
-    console.log("[tariff-highlight] runHighlight called, req=", req, "pdfContainerRef=", !!pdfContainerRef.current);
-    if (!req || !pdfContainerRef.current) return;
-
-    const { pageNumber, highlightText, highlightName, rowTopPct, rowBottomPct } = req;
-
-    const normalize = (s: string) => s.replace(/[,\s]+/g, " ").trim().toLowerCase();
-
-    const getSpanTopPx = (span: HTMLElement): number | null => {
-      const top = span.style.top;
-      if (top) {
-        const calcMatch = top.match(/\*\s*([\d.]+)px/);
-        if (calcMatch) return parseFloat(calcMatch[1]);
-        if (top.endsWith("px")) return parseFloat(top);
-        if (top.endsWith("%")) return parseFloat(top);
-      }
-      return null;
-    };
-
-    const applyHighlight = (span: HTMLElement) => {
-      span.classList.add("tariff-highlight");
-      span.style.background = "rgba(251, 191, 36, 0.45)";
-      span.style.borderRadius = "2px";
-      span.style.outline = "1px solid rgba(217, 119, 6, 0.6)";
-      span.style.mixBlendMode = "multiply";
-    };
-
-    // Find wrapper
-    const wrappers = pdfContainerRef.current.querySelectorAll("[data-page-number]");
-    console.log("[tariff-highlight] wrappers found=", wrappers.length,
-      "innerHTML snippet=", pdfContainerRef.current.innerHTML.slice(0, 300));
-    let targetWrapper: HTMLElement | null = null;
-    for (const el of Array.from(wrappers)) {
-      if (parseInt((el as HTMLElement).getAttribute("data-page-number") || "0") === pageNumber) {
-        targetWrapper = el as HTMLElement;
-        break;
-      }
-    }
-
-    if (!targetWrapper) {
-      if (highlightAttemptsRef.current < 15) {
-        highlightAttemptsRef.current++;
-        highlightTimerRef.current = setTimeout(runHighlight, 400);
-      }
+  const loadBsi = useCallback(async () => {
+    const trimmed = claimId?.trim();
+    if (!trimmed) {
+      setBsiData(null);
+      setBsiError("Claim ID is not available for this job.");
       return;
     }
 
-    // Scroll to page — use instant scroll so the page enters viewport immediately,
-    // which triggers react-pdf to render its text layer synchronously.
-    targetWrapper.scrollIntoView({ behavior: "instant" as ScrollBehavior, block: "start" });
+    setBsiLoading(true);
+    setBsiError(null);
 
-    if (!highlightText && !highlightName) {
-      pendingHighlightRef.current = null;
-      return;
-    }
-
-    // react-pdf lazy-renders text layer only when page is in viewport.
-    // After scrollIntoView, give the browser a moment to render, then search.
-    // Use document-wide query to find spans for this specific page number.
-    const pageEl = targetWrapper.querySelector(`[data-page-number="${pageNumber}"].react-pdf__Page`) 
-                ?? targetWrapper.querySelector(".react-pdf__Page");
-    const textLayer = pageEl
-      ? pageEl.querySelector(".react-pdf__Page__textContent")
-      : targetWrapper.querySelector(".react-pdf__Page__textContent");
-
-    const spans = textLayer ? Array.from(textLayer.querySelectorAll("span")) as HTMLElement[] : [];
-    console.log("[tariff-highlight] targetWrapper found, textLayer=", !!textLayer, "spans=", spans.length);
-
-    if (spans.length === 0) {
-      if (highlightAttemptsRef.current < 5) {
-        // Give react-pdf a few chances to render the text layer
-        highlightAttemptsRef.current++;
-        const delay = Math.min(300 + highlightAttemptsRef.current * 300, 1200);
-        highlightTimerRef.current = setTimeout(runHighlight, delay);
-        return;
-      }
-      // Text layer never populated — this is a scanned PDF.
-      // Fall through to Strategy B (pdfjs direct text extraction + canvas overlay).
-    }
-
-    // Clear old highlights
-    clearTariffHighlights();
-
-    const normName    = highlightName ? normalize(highlightName) : "";
-    const normAmount  = highlightText ? normalize(String(highlightText)) : "";
-    const amountDigits = normAmount.replace(/[^0-9]/g, "");
-    const nameWords   = normName.split(" ").filter(w => w.length > 3);
-
-    const positionedSpans = spans.filter(s => getSpanTopPx(s) !== null);
-    console.log("[tariff-highlight] positionedSpans=", positionedSpans.length, "of", spans.length,
-      "sample span style=", spans[0]?.getAttribute("style"), "sample text=", spans[0]?.textContent?.slice(0,30));
-    const allTops = [...new Set(
-      positionedSpans.map(s => getSpanTopPx(s)).filter(t => t !== null) as number[]
-    )].sort((a, b) => a - b);
-
-    const highlightLine = (anchorTop: number) => {
-      const anchorIdx = allTops.findIndex(t => Math.abs(t - anchorTop) <= 2);
-      const linesToHighlight = new Set([anchorIdx]);
-      if (anchorIdx + 1 < allTops.length) {
-        const nextTop = allTops[anchorIdx + 1];
-        const nextText = positionedSpans
-          .filter(s => Math.abs(getSpanTopPx(s)! - nextTop) <= 2)
-          .map(s => s.textContent || "").join("");
-        if (Math.abs(nextTop - anchorTop) < 15 && !/[0-9]/.test(nextText)) {
-          linesToHighlight.add(anchorIdx + 1);
-        }
-      }
-      positionedSpans.forEach(span => {
-        const t = getSpanTopPx(span)!;
-        const idx = allTops.findIndex(v => Math.abs(v - t) <= 2);
-        if (linesToHighlight.has(idx)) applyHighlight(span);
-      });
-    };
-
-    // Detect Excel-converted PDFs by tariff filename
-    const isExcelPdf = !!(tariffFileNameProp && (
-      tariffFileNameProp.toLowerCase().endsWith(".xlsx") ||
-      tariffFileNameProp.toLowerCase().endsWith(".xls")
-    ));
-    console.log("[tariff-highlight] isExcelPdf=", isExcelPdf, "tariffFileName=", tariffFileNameProp);
-
-    // STRATEGY A: text search via DOM spans — works for all PDFs with embedded text
-    // Use highlightName first (more specific), fall back to highlightText
-    const searchTarget = highlightName || highlightText || "";
-    if (searchTarget && searchTarget.length > 3) {
-      const searchWords = normalize(searchTarget).split(" ").filter(w => w.length > 3);
-      if (searchWords.length > 0) {
-        let bestSpan: HTMLElement | null = null;
-        let bestHits = 0;
-        for (const span of positionedSpans) {
-          const t = normalize(span.textContent || "");
-          if (!t) continue;
-          const hits = searchWords.filter(w => t.includes(w)).length;
-          if (hits > bestHits) { bestHits = hits; bestSpan = span; }
-        }
-        // Threshold: 1 hit for Excel/short names, 2 for regular PDFs
-        const threshold = isExcelPdf ? 1 : Math.min(2, searchWords.length);
-        console.log("[tariff-highlight] Strategy A: searchTarget=", searchTarget, "words=", searchWords, "bestHits=", bestHits, "threshold=", threshold, "bestSpan text=", bestSpan?.textContent);
-        if (bestSpan && bestHits >= threshold) {
-          const spanStyle = bestSpan.getAttribute("style") || "";
-          const isRotated = spanStyle.includes("rotate(-90deg)") || spanStyle.includes("rotate(90deg)");
-          if (isRotated) {
-            applyHighlight(bestSpan);
-          } else {
-            highlightLine(getSpanTopPx(bestSpan)!);
-          }
-          pendingHighlightRef.current = null;
-          return;
-        }
-      }
-    }
-
-    // STRATEGY B: AI-provided row coordinates — only for scanned PDFs with no text layer
-    // (Strategy A above handles all text-based PDFs including Excel-converted ones)
-    if (!isExcelPdf && rowTopPct && rowBottomPct && rowTopPct > 0) {
-      console.log("[tariff-highlight] Strategy B: using AI coordinates", rowTopPct, rowBottomPct);
-      const canvas = targetWrapper.querySelector("canvas") as HTMLCanvasElement | null;
-      if (canvas) {
-        const canvasRect   = canvas.getBoundingClientRect();
-        const containerRect = pdfContainerRef.current!.getBoundingClientRect();
-        const scrollTop    = pdfContainerRef.current!.scrollTop;
-
-        const canvasOffsetTop  = canvasRect.top  - containerRect.top  + scrollTop;
-        const canvasOffsetLeft = canvasRect.left - containerRect.left;
-        const canvasHeight     = canvasRect.height;
-        const canvasWidth      = canvasRect.width;
-
-        // Convert % of page to px within canvas
-        const topPx    = canvasOffsetTop  + (rowTopPct    / 100) * canvasHeight;
-        const bottomPx = canvasOffsetTop  + (rowBottomPct / 100) * canvasHeight;
-        const height   = Math.max(bottomPx - topPx, 14);
-
-        pdfContainerRef.current!.querySelectorAll(".tariff-highlight-overlay").forEach(el => el.remove());
-
-        const overlay = document.createElement("div");
-        overlay.className = "tariff-highlight-overlay";
-        overlay.style.cssText = `
-          position: absolute;
-          left: ${canvasOffsetLeft}px;
-          top: ${topPx}px;
-          width: ${canvasWidth}px;
-          height: ${height}px;
-          background: rgba(251, 191, 36, 0.35);
-          border-top: 2px solid rgba(217, 119, 6, 0.8);
-          border-bottom: 2px solid rgba(217, 119, 6, 0.8);
-          pointer-events: none;
-          z-index: 10;
-        `;
-        (pdfContainerRef.current as HTMLElement).style.position = "relative";
-        pdfContainerRef.current!.appendChild(overlay);
-        console.log("[tariff-highlight] Strategy B: overlay at top=", topPx, "height=", height);
-      }
-      pendingHighlightRef.current = null;
-      return;
-    }
-
-    // Group into lines
-    const lineMap = new Map<number, HTMLElement[]>();
-    for (const span of positionedSpans) {
-      const t = getSpanTopPx(span)!;
-      const existing = [...lineMap.keys()].find(k => Math.abs(k - t) <= 2);
-      if (existing !== undefined) lineMap.get(existing)!.push(span);
-      else lineMap.set(t, [span]);
-    }
-
-    // Detect "column layout" PDFs (Excel-converted) where all amounts are on one line
-    // and all names are on another separate line. In this case we match by index position.
-    const allLines = [...lineMap.entries()]
-      .map(([top, lineSpans]) => ({
-        top,
-        spans: lineSpans,
-        text: normalize(lineSpans.map(s => s.textContent || "").join(" ")),
-        rawSpans: lineSpans,
-      }))
-      .filter(l => l.text.trim().length > 0)
-      .sort((a, b) => a.top - b.top);
-
-    // Check if this is a column-layout PDF:
-    // One line has mostly numbers, another has mostly text (procedure names)
-    const amountsLine = allLines.find(l => {
-      const digits = l.text.replace(/[^0-9]/g, "");
-      const nonDigits = l.text.replace(/[0-9\s|,]/g, "");
-      return digits.length > nonDigits.length && l.rawSpans.length >= 3;
-    });
-    const namesLine = allLines.find(l => {
-      const nonDigits = l.text.replace(/[0-9\s|,]/g, "");
-      const digits = l.text.replace(/[^0-9]/g, "");
-      return nonDigits.length > digits.length && l.rawSpans.length >= 3;
-    });
-
-    if (amountsLine && namesLine && amountsLine !== namesLine) {
-      // Column layout — find index of target amount in amounts line
-      // then highlight the span at the same index in names line
-      const amountSpans = amountsLine.rawSpans;
-      let amountIdx = -1;
-      for (let i = 0; i < amountSpans.length; i++) {
-        const spanDigits = (amountSpans[i].textContent || "").replace(/[^0-9]/g, "");
-        if (spanDigits === amountDigits) { amountIdx = i; break; }
-      }
-
-      // Find name span by matching name words
-      const nameSpans = namesLine.rawSpans;
-      let nameIdx = -1;
-      if (nameWords.length > 0) {
-        let bestHits = 0;
-        for (let i = 0; i < nameSpans.length; i++) {
-          const t = normalize(nameSpans[i].textContent || "");
-          const hits = nameWords.filter(w => t.includes(w)).length;
-          if (hits > bestHits) { bestHits = hits; nameIdx = i; }
-        }
-      }
-      // Fallback to same index as amount
-      if (nameIdx === -1 && amountIdx !== -1) nameIdx = amountIdx;
-
-      // Highlight matched name span and its corresponding amount span
-      if (nameIdx !== -1 && nameIdx < nameSpans.length) {
-        const t = getSpanTopPx(nameSpans[nameIdx]);
-        if (t !== null) highlightLine(t);
-      }
-      if (amountIdx !== -1 && amountIdx < amountSpans.length) applyHighlight(amountSpans[amountIdx]);
-
-      pendingHighlightRef.current = null;
-      return;
-    }
-
-    // Standard layout — find best matching line using amount + name
-    const topValues = [...lineMap.keys()].sort((a, b) => a - b);
-
-    // Strategy 1: find the amount span directly (most reliable anchor)
-    let amountAnchorTop: number | null = null;
-    if (amountDigits.length > 0) {
-      for (const span of positionedSpans) {
-        const spanDigits = (span.textContent || "").replace(/[^0-9]/g, "");
-        if (spanDigits === amountDigits) {
-          amountAnchorTop = getSpanTopPx(span);
-          break;
-        }
-      }
-    }
-
-    // Strategy 2: find the name span (most words matching)
-    let nameAnchorTop: number | null = null;
-    if (nameWords.length > 0) {
-      let bestHits = 0;
-      for (const span of positionedSpans) {
-        const t = normalize(span.textContent || "");
-        const hits = nameWords.filter(w => t.includes(w)).length;
-        if (hits > bestHits) { bestHits = hits; nameAnchorTop = getSpanTopPx(span); }
-      }
-    }
-
-    // If both found, highlight both their lines + any lines in between
-    if (amountAnchorTop !== null && nameAnchorTop !== null) {
-      const minTop = Math.min(amountAnchorTop, nameAnchorTop);
-      const maxTop = Math.max(amountAnchorTop, nameAnchorTop);
-      // Only highlight lines between name and amount if they're close (same entry)
-      // Use a generous threshold: up to 4 lines apart
-      const minIdx = topValues.findIndex(v => Math.abs(v - minTop) <= 2);
-      const maxIdx = topValues.findIndex(v => Math.abs(v - maxTop) <= 2);
-      if (minIdx !== -1 && maxIdx !== -1 && (maxIdx - minIdx) <= 4) {
-        // Highlight all lines from name to amount (inclusive)
-        for (let i = minIdx; i <= maxIdx; i++) {
-          const lineTop = topValues[i];
-          positionedSpans.forEach(span => {
-            const t = getSpanTopPx(span);
-            if (t !== null && Math.abs(t - lineTop) <= 2) applyHighlight(span);
-          });
-        }
-      } else {
-        // Too far apart — just highlight the two individual spans
-        positionedSpans.forEach(span => {
-          const t = getSpanTopPx(span);
-          if (t === null) return;
-          if (amountAnchorTop !== null && Math.abs(t - amountAnchorTop) <= 2) {
-            const digits = (span.textContent || "").replace(/[^0-9]/g, "");
-            if (digits === amountDigits) applyHighlight(span);
-          }
-          if (nameAnchorTop !== null && Math.abs(t - nameAnchorTop) <= 2) {
-            const txt = normalize(span.textContent || "");
-            if (nameWords.some(w => txt.includes(w))) applyHighlight(span);
-          }
-        });
-      }
-      pendingHighlightRef.current = null;
-      return;
-    }
-
-    // Only one anchor found — highlight just that line
-    const singleAnchorTop = amountAnchorTop ?? nameAnchorTop;
-    if (singleAnchorTop === null) { pendingHighlightRef.current = null; return; }
-    highlightLine(singleAnchorTop);
-
-    pendingHighlightRef.current = null;
-  };
-
-  const handleScrollToTariffPage = (pageNumber?: number | null, highlightText?: string, highlightName?: string, rowTopPct?: number, rowBottomPct?: number) => {
-    if (!pageNumber || pageNumber <= 0) return;
-    if (!tariffFile) return;
-
-    // Cancel any pending highlight
-    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
-    pendingHighlightRef.current = { pageNumber, highlightText, highlightName, rowTopPct, rowBottomPct };
-    highlightAttemptsRef.current = 0;
-
-    console.log("[tariff-highlight] scheduling runHighlight, page=", pageNumber, "text=", highlightText, "name=", highlightName);
-    setActivePdfFile("tariff");
-    // Start after tab switch renders
-    highlightTimerRef.current = setTimeout(() => {
-      console.log("[tariff-highlight] setTimeout fired, calling runHighlight");
-      runHighlight();
-    }, 300);
-  };
-
-  const formatAmountValue = (amount?: number | null) => {
-    if (amount === null || amount === undefined || Number.isNaN(amount)) {
-      return "—";
-    }
-    return amount.toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
-  };
-
-  const claimCalculation = useMemo(() => {
-    if (!displayAnalysis) return null;
-    return computeClaimCalculation(displayAnalysis);
-  }, [displayAnalysis]);
-
-  // Track user-edited amounts from FinancialSummaryTab
-  const [editedAmounts, setEditedAmounts] = useState<{
-    claimed: number | null;
-    tariff: number | null;
-    approved: number | null;
-  }>({ claimed: null, tariff: null, approved: null });
-
-  // Financial Summary Calculations
-  const financialSummaryTotals = useMemo(() => {
-    if (!claimCalculation) {
-      return {
-        hospitalBillAfterDiscount: 0,
-        hospitalBillBeforeDiscount: 0,
-        discount: 0,
-        totalTariffDeductible: 0,
-        totalTariffOverflow: 0,
-        policyCoverageWithinTariff: 0,
-        totalNME: 0,
-        insurerPayable: 0,
-        patientPayable: 0,
-        cataractSublimit: null,
-      };
-    }
-    return {
-      hospitalBillAfterDiscount: claimCalculation.hospitalBillAfterDiscount,
-      hospitalBillBeforeDiscount: claimCalculation.hospitalBillBeforeDiscount,
-      discount: claimCalculation.discount,
-      totalTariffDeductible: 0,
-      totalTariffOverflow: 0,
-      policyCoverageWithinTariff: 0,
-      totalNME: 0,
-      insurerPayable: claimCalculation.insurerPayable,
-      patientPayable: 0,
-      cataractSublimit: null,
-    };
-  }, [claimCalculation]);
-
-  const finalInsurerPayable =
-    claimCalculation?.finalInsurerPayable ?? displayAnalysis?.finalInsurerPayable;
-  const finalInsurerPayableNotes =
-    claimCalculation?.finalInsurerPayableNotes ||
-    displayAnalysis?.finalInsurerPayableNotes;
-
-  // ── Build pre-populated query message from validation failures ───────────────
-  // Collects all field mismatches and missing investigation reports,
-  // formats them as a structured query message.
-  const buildQueryMessage = (): { type: string; message: string } => {
-    const lines: string[] = [];
-
-    // 1. Field validation mismatches from patientInfoDb sections
-    if (displayAnalysis?.patientInfoDb?.sections?.length) {
-      const allRows = displayAnalysis.patientInfoDb.sections.flatMap((s) => s.rows);
-
-      const normalizeVal = (v: string | number | boolean | null | undefined): string =>
-        String(v ?? "").trim();
-
-      const normalizeDate = (s: string): string => {
-        const iso = s.match(/^(\d{4}-\d{2}-\d{2})/);
-        if (iso) return iso[1];
-        const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-        if (dmy) return `${dmy[3]}-${dmy[2].padStart(2,"0")}-${dmy[1].padStart(2,"0")}`;
-        return s;
-      };
-
-      const normalizeGender = (s: string): string => {
-        const g = s.toLowerCase();
-        if (g === "1" || g === "f" || g === "female") return "female";
-        if (g === "2" || g === "m" || g === "male")   return "male";
-        return g;
-      };
-
-      const fieldChecks: Array<{
-        label: string;
-        aiValue: string | null | undefined;
-        aliases: string[];
-        normalize?: (s: string) => string;
-      }> = [
-        { label: "Patient Name",    aiValue: displayAnalysis.patientName?.value as string,    aliases: ["membername","patientname","name"] },
-        { label: "Patient Age",     aiValue: String(displayAnalysis.patientAge?.value ?? ""), aliases: ["age","patientage"] },
-        { label: "Gender",          aiValue: displayAnalysis.patientGender?.value as string,  aliases: ["gender","genderid"], normalize: normalizeGender },
-        { label: "Policy Number",   aiValue: displayAnalysis.policyNumber?.value as string,   aliases: ["uhidno","uhid","patientuhid","policyno","policynumber"] },
-        { label: "Hospital Name",   aiValue: displayAnalysis.hospitalName?.value as string,   aliases: ["hospitalname","providername","name"] },
-        { label: "Admission Date",  aiValue: displayAnalysis.admissionDate?.value as string,  aliases: ["dateofadmission","doa","admissiondate"], normalize: normalizeDate },
-        { label: "Document Date",   aiValue: displayAnalysis.date?.value as string,           aliases: ["dateofbill","documentdate","billdate","date","createddate"] , normalize: normalizeDate },
-      ];
-
-      const normalizeKey = (k: string) => k.toLowerCase().replace(/[^a-z0-9]/g, "");
-
-      for (const check of fieldChecks) {
-        if (!check.aiValue) continue;
-        const norm = check.normalize ?? ((s: string) => s.trim().toLowerCase().replace(/\s+/g," "));
-        const aiNorm = norm(check.aiValue);
-        if (!aiNorm) continue;
-
-        // Find DB value using aliases
-        let dbVal: string | null = null;
-        for (const alias of check.aliases) {
-          for (const row of allRows) {
-            for (const [k, v] of Object.entries(row)) {
-              if (normalizeKey(k) === alias && v !== null && v !== undefined && String(v).trim()) {
-                dbVal = String(v).trim();
-                break;
-              }
-            }
-            if (dbVal) break;
-          }
-          if (dbVal) break;
-        }
-
-        if (!dbVal) continue;
-        const dbNorm = norm(dbVal);
-        if (aiNorm !== dbNorm) {
-          lines.push(`• ${check.label}: "${check.aiValue}" in medical bill vs "${dbVal}" in Spectra DB`);
-        }
-      }
-    }
-
-    // 2. Missing investigation reports from conditionTests
-    const conditionTests = (
-      displayAnalysis?.medicalAdmissibility as
-        | { conditionTests?: Array<{ testName: string; status: string }> }
-        | null | undefined
-    )?.conditionTests ?? [];
-
-    const missingTests = conditionTests.filter((t) => t.status === "missing");
-    for (const t of missingTests) {
-      lines.push(`• ${t.testName} report is missing in the provided medical documents`);
-    }
-
-    if (!lines.length) return { type: "", message: "" };
-
-    const message = "The following discrepancies/issues were found during claim review:\n\n"
-      + lines.join("\n")
-      + "\n\nPlease provide clarification or submit the correct documents.";
-
-    return { type: "billing", message };
-  };
-
-  // ── Determine approved accommodation using AI ────────────────────────────────
-  // Fetches benefit plan room rules + uses tariff/bill context to ask Claude
-  // which facility option best matches what the patient is eligible for.
-  // Sends data to Spectra parent via postMessage on Save click.
-  // Populates: Aprv Accommodation + Probable Diagnosis + Present Complaint
-  // Pre-populate presentingComplaint from AI extraction only
-  useEffect(() => {
-    if (presentingComplaint || !displayAnalysis) return;
-    const admissibility = displayAnalysis?.medicalAdmissibility as {
-      presentingComplaint?: string | null;
-    } | null | undefined;
-    if (admissibility?.presentingComplaint) {
-      setPresentingComplaint(admissibility.presentingComplaint);
-    }
-  }, [displayAnalysis]);
-
-  // Pre-populate doctorNotes and availedAccommodation from spectraFields
-  useEffect(() => {
-    if (availedAccommodationOverride) {
-      setAvailedAccommodation(availedAccommodationOverride);
-    } else if (spectraFields?.availedAccommodation) {
-      setAvailedAccommodation((spectraFields.availedAccommodation as string) ?? "");
-    }
-    const claimId = state?.claimId?.trim();
-    if (!claimId || doctorNotes) return;
-    // Try spectraFields first (fast path)
-    if (spectraFields?.doctorNotes) {
-      setDoctorNotes((spectraFields.doctorNotes as string) ?? "");
-      return;
-    }
-    // Fallback: fetch directly from server
-    fetch(`/api/doctor-notes?claimId=${encodeURIComponent(claimId)}`)
-      .then((r) => r.json())
-      .then((data) => { if (data.doctorNotes) setDoctorNotes(data.doctorNotes); })
-      .catch(() => {});
-  }, [state?.claimId, spectraFields]);
-
-
-  // Fetch benefit plan snapshot for alignment conditions
-  useEffect(() => {
-    const claimId = state?.claimId?.trim();
-    if (!claimId || benefitPlanSnapshot) return;
-    let cancelled = false;
-    fetch("/api/benefit-plan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ claimId }),
-    })
-      .then((r) => r.json())
-      .then((d) => {
-        if (!cancelled) setBenefitPlanSnapshot((d as { snapshot?: Record<string, unknown> }).snapshot ?? null);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state?.claimId]);
-
-  const sendAccommodationToSpectra = async () => {
-    if (!(window.parent && window.parent !== window)) {
-      return;
-    }
-
-    // ── Approved Accommodation ───────────────────────────────────────────────
-    const facilityId =
-      approvedAccommodationRef.current ??
-      (spectraFields?.availedAccommodationId as string | undefined) ??
-      null;
-
-    if (facilityId) {
-      window.parent.postMessage(
-        { source: "claimai", type: "setApprovedAccommodation", facilityId },
-        "*",
-      );
-    } else {
-      window.parent.postMessage(
-        { source: "claimai", type: "copyAvailedToApproved" },
-        "*",
-      );
-    }
-
-    // ── Clinical / Treatment Details ─────────────────────────────────────────
-    const diagnosis        = displayAnalysis?.medicalAdmissibility?.diagnosis        ?? null;
-    const lineOfTreatment  = (displayAnalysis?.medicalAdmissibility as { lineOfTreatment?: string | null } | null | undefined)?.lineOfTreatment ?? null;
-
-    // ── ICD codes — collect all 7 levels from the conditionKey "__icd__" ─────
-    // icdLevels is local to medical-admissibility-tab; read from DOM state via event
-    // We pass the diagnosis text so Spectra can look it up in its MasterData.ICD10
-
-    // Infer hospital treatment type: Surgical or Medical
-    const diagLower = (diagnosis ?? "").toLowerCase();
-    const lineOfTreatmentLower = (lineOfTreatment ?? "").toLowerCase();
-    const combined = `${diagLower} ${lineOfTreatmentLower}`;
-    const hospTreatmentKeyword =
-      /cataract|phaco|surger|cholecyst|appendic|hernia|fracture|ortho|laparoscop|bypass|angioplasty|stent|arthroplasty|joint replacement|spine|neurosurg|tumor|carcinoma|resection|transplant|excision|biopsy|repair|fixation/.test(combined)
-        ? "surgical"
-        : /pneumonia|infection|fever|diabet|hypertension|asthma|copd|bronchit|cardiac arrest|myocardial|renal failure|hepatitis|conservative|medical management|iv antibio|chemotherapy/.test(combined)
-        ? "medical"
-        : null;
-
-    const procedureHint  = `${diagnosis ?? ""} ${lineOfTreatment ?? ""}`.toLowerCase();
-    // Use user-edited amounts if available, else computed values
-    const eligibleAmount = editedAmounts.approved
-                        ?? claimCalculation?.finalInsurerPayable
-                        ?? displayAnalysis?.finalInsurerPayable
-                        ?? claimCalculation?.insurerPayable
-                        ?? 0;
-    const packageAmount  = editedAmounts.claimed
-                        ?? claimCalculation?.hospitalBillAfterDiscount
-                        ?? claimCalculation?.hospitalBillBeforeDiscount
-                        ?? (displayAnalysis?.totalAmount?.value ?? 0);
-
-    // Send clinical details immediately — don't wait for ICD fetch
-    if (diagnosis || lineOfTreatment || presentingComplaint.trim() || hospTreatmentKeyword || processingRemarks.trim() || doctorNotes.trim()) {
-      window.parent.postMessage(
-        {
-          source:               "claimai",
-          type:                 "setClinicalDetails",
-          diagnosis:            diagnosis             ?? "",
-          lineOfTreatment:      lineOfTreatment       ?? "",
-          presentingComplaint:  presentingComplaint.trim(),
-          processingRemarks:    processingRemarks.trim(),
-          doctorNotes:          doctorNotes.trim(),
-          hospTreatmentKeyword: hospTreatmentKeyword  ?? "",
-          icdSlots:             [],
-          procedureHint:        procedureHint,
-          eligibleAmount:       eligibleAmount,
-          packageAmount:        packageAmount,
-        },
-        "*",
-      );
-    }
-
-    // Send billing details to Spectra for Bill Details automation
-    // tariffAmount: use edited tariff if available, else from analysis
-    const tariffAmtForBilling = editedAmounts.tariff
-      ?? (displayAnalysis?.tariffExtractionItem as Array<{amount?: number}> | null | undefined)
-          ?.reduce((s, i) => s + (i.amount ?? 0), 0)
-      ?? 0;
-    if (packageAmount > 0 || tariffAmtForBilling > 0) {
-      window.parent.postMessage(
-        {
-          source:             "claimai",
-          type:               "setBillingDetails",
-          hospitalBillAmount: packageAmount,
-          tariffAmount:       tariffAmtForBilling,
-          totalAmountApproved: eligibleAmount,
-        },
-        "*",
-      );
-    }
-
-    // Fetch ICD codes in background and send as separate message
-    if (diagnosis) {
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 5000);
-        const icdRes = await fetch(`/api/icd?diagnosis=${encodeURIComponent(diagnosis)}`, { signal: controller.signal });
-        clearTimeout(timer);
-        if (icdRes.ok) {
-          const icdData = await icdRes.json() as { slots?: Array<{ code: string; description: string; level: number } | null> };
-          const icdSlots = icdData.slots ?? [];
-
-          // Override with doctor-selected ICD code from Diagnosis-Linked section if available
-          const finalIcdCode = lastIcdCodeFromTab.trim() || undefined;
-
-          window.parent.postMessage(
-            {
-              source:        "claimai",
-              type:          "setIcdSlots",
-              icdSlots,
-              procedureHint,
-              eligibleAmount,
-              packageAmount,
-              lastIcdCode:   finalIcdCode, // explicit override — takes priority in Spectra
-            },
-            "*",
-          );
-        }
-      } catch { /* ignore */ }
-    }
-  };
-
-  const determineApprovedAccommodation = async (): Promise<string | null> => {
     try {
-      const claimId = state?.claimId?.trim();
-      const facilityOptions = (spectraFields?.facilityOptions as Array<{ id: string; text: string }> | undefined) ?? [];
-      const availedId = spectraFields?.availedAccommodationId as string | undefined;
-      if (!claimId || !facilityOptions.length || !availedId) return availedId ?? null;
-
-      // Find availed room text
-      const availedOption = facilityOptions.find((f) => f.id === availedId);
-      const availedText = availedOption?.text ?? availedId;
-
-      // Fetch benefit plan room conditions
-      let roomNotes = "";
-      let roomRows: Array<Record<string, unknown>> = [];
-      try {
-        const bpRes = await fetch("/api/benefit-plan", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ claimId }),
-        });
-        if (bpRes.ok) {
-          const bpData = await bpRes.json() as {
-            snapshot?: {
-              remarks?: {
-                room?: Array<Record<string, unknown>>;
-                main?: Array<Record<string, unknown>>;
-              };
-            };
-          };
-          const mainRow = bpData?.snapshot?.remarks?.main?.[0] ?? {};
-          roomNotes = String(mainRow["RoomNotes"] ?? "").trim();
-          roomRows = bpData?.snapshot?.remarks?.room ?? [];
-        }
-      } catch { /* use empty */ }
-
-      // Collect tariff room rent cap
-      const tariffItems = displayAnalysis?.tariffExtractionItem ?? [];
-      const roomRentCapItem = tariffItems.find((t) =>
-        /room\s*rent\s*cap/i.test(t.name) || /accommodation\s*cap/i.test(t.name)
-      );
-      const roomRentCap = roomRentCapItem ? `₹${roomRentCapItem.amount}/day` : null;
-
-      // Collect hospital bill room charges
-      const billSummary = displayAnalysis?.hospitalSummary ?? [];
-      const roomChargeItem = billSummary.find((s) =>
-        /room/i.test(s.serviceName) || /accommodation/i.test(s.serviceName)
-      );
-      const roomCharge = roomChargeItem ? `₹${roomChargeItem.amount}` : null;
-
-      // Days in hospital
-      const admDate = displayAnalysis?.admissionDate?.value;
-      const disDate = displayAnalysis?.dischargeDate?.value;
-      let days: number | null = null;
-      if (admDate && disDate) {
-        const d1 = new Date(admDate), d2 = new Date(disDate);
-        if (!isNaN(d1.getTime()) && !isNaN(d2.getTime())) {
-          days = Math.max(1, Math.round((d2.getTime() - d1.getTime()) / 86400000));
-        }
-      }
-
-      // Build prompt — using string concat to avoid nested template literal syntax errors
-      const facilityList = facilityOptions.map((f) => "  " + f.id + ": " + f.text).join("\n");
-      const roomRowsText = roomRows.length > 0
-        ? "Room details: " + JSON.stringify(roomRows)
-        : "";
-      const roomChargeNum = (days && roomCharge)
-        ? Math.round(Number(String(roomCharge).replace(/[^0-9]/g, "")) / days)
-        : 0;
-      const roomChargePerDay = (days && roomCharge)
-        ? " over " + String(days) + " days (approx Rs." + String(roomChargeNum) + "/day)"
-        : "";
-
-      const prompt = [
-        "You are a health insurance claim auditor. Based on the following information, decide which approved accommodation type should be applied.",
-        "",
-        "AVAILED ACCOMMODATION (what patient used): " + availedText,
-        "",
-        "AVAILABLE ACCOMMODATION OPTIONS (id - name):",
-        facilityList,
-        "",
-        "BENEFIT PLAN ROOM CONDITIONS:",
-        roomNotes || "(no room notes in benefit plan)",
-        roomRowsText,
-        "",
-        "TARIFF ROOM RENT CAP: " + (roomRentCap ?? "(not specified in tariff)"),
-        "",
-        "HOSPITAL ROOM CHARGES: " + (roomCharge ?? "(not found in bill summary)") + roomChargePerDay,
-        "",
-        "INSTRUCTIONS:",
-        "1. Compare the availed accommodation with the benefit plan room conditions and tariff cap.",
-        "2. If the availed room is within the eligible limit, approve the same room type.",
-        "3. If the availed room exceeds the limit (e.g. private room but policy covers semi-private), approve the highest eligible room type.",
-        "4. If no room conditions are specified, approve same as availed.",
-        "5. Return ONLY a JSON object with exactly this shape, no explanation:",
-        '{"facilityId": "<id from options above>", "reason": "<one sentence reason>"}',
-      ].join("\n");
-
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("/api/bsi", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 200,
-          messages: [{ role: "user", content: prompt }],
-        }),
+        body: JSON.stringify({ claimId: trimmed }),
       });
 
-      if (!response.ok) return availedId;
+      const payload = (await response.json()) as { bsiData?: BSIData; error?: string };
 
-      const data = await response.json() as {
-        content?: Array<{ type: string; text?: string }>;
-      };
-      const text = data.content?.find((b) => b.type === "text")?.text ?? "";
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) return availedId;
-
-      const parsed = JSON.parse(jsonMatch[0]) as { facilityId?: string; reason?: string };
-      const recommendedId = parsed?.facilityId?.toString().trim();
-
-      // Validate the returned ID is in the options list
-      if (recommendedId && facilityOptions.some((f) => f.id === recommendedId)) {
-        console.log("[ClaimAI] Accommodation recommendation:", parsed.reason);
-        return recommendedId;
+      if (!response.ok || !payload.bsiData) {
+        throw new Error(payload.error ?? "Failed to fetch BSI data");
       }
-      return availedId;
+
+      setBsiData(payload.bsiData);
     } catch (err) {
-      console.warn("[ClaimAI] determineApprovedAccommodation error:", err);
-      return spectraFields?.availedAccommodationId ?? null;
+      setBsiData(null);
+      setBsiError(err instanceof Error ? err.message : "Failed to fetch BSI data");
+    } finally {
+      setBsiLoading(false);
     }
-  };
+  }, [claimId]);
 
-  // Run accommodation determination in background as soon as data is available
-  // so the result is ready by the time Save is clicked (no delay on save)
-  // Placed here — after displayAnalysis and determineApprovedAccommodation are defined
   useEffect(() => {
-    approvedAccommodationRef.current = null;
-    if (!spectraFields?.availedAccommodationId || !spectraFields?.facilityOptions?.length) return;
-    if (!displayAnalysis) return;
+    void loadBsi();
+  }, [loadBsi]);
 
+  // Fetch benefit plan — extract cappings and benefit plan limit
+  useEffect(() => {
+    const trimmed = claimId?.trim();
+    if (!trimmed) return;
     let cancelled = false;
+
     const run = async () => {
-      const result = await determineApprovedAccommodation();
-      if (!cancelled) approvedAccommodationRef.current = result;
+      try {
+        const r = await fetch("/api/benefit-plan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ claimId: trimmed }),
+        });
+        const d = await r.json() as { snapshot?: Record<string, unknown> };
+        if (cancelled) return;
+
+        type Row = Record<string, unknown>;
+        const snap = d.snapshot;
+        if (!snap) return;
+
+        const getF = (row: Row, keys: string[]): unknown => {
+          for (const k of keys) if (row[k] !== undefined && row[k] !== null) return row[k];
+          return null;
+        };
+        const asT = (v: unknown) => String(v ?? "").trim();
+        const parseId = (v: unknown): number | null => {
+          const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null;
+        };
+        const describeLimit = (label: string, abs: unknown, perc: unknown, count?: unknown): string | null => {
+          const a = asT(abs), p = asT(perc);
+          if (!a && !p) return null;
+          const parts = [a ? `${label} is ${a}` : "", p ? `(or) ${p}% on SumInsured` : "", count ? `::: Count ${count}` : ""].filter(Boolean);
+          return parts.join(" ");
+        };
+
+        const conditions: Row[] = ((snap as { masters?: { conditions?: Row[] } }).masters?.conditions) ?? [];
+        const ruleConfigs: Row[] = ((snap as { main?: { ruleConfigs?: Row[] } }).main?.ruleConfigs) ?? [];
+
+        const condById = new Map<number, Row>();
+        conditions.forEach((row) => {
+          const id = parseId(getF(row, ["ID"]));
+          if (id !== null) condById.set(id, row);
+        });
+
+        // Log all parent group names so we know exact names from DB
+        const _parentNames = new Set<string>();
+        conditions.forEach((row) => {
+          const _pid = parseId(getF(row, ["ParentID"]));
+          if (!_pid) return;
+          const _par = condById.get(_pid);
+          if (_par) _parentNames.add(asT(getF(_par, ["Name"])));
+        });
+        console.log("[ClaimAI] Benefit plan parent group names:", Array.from(_parentNames));
+
+        const allCaps: string[] = [];
+        const seen = new Set<string>();
+
+        conditions.forEach((row) => {
+          const parentId = parseId(getF(row, ["ParentID"]));
+          if (!parentId) return;
+          const parent = condById.get(parentId);
+          if (!parent) return;
+          // Only Ailment Conditions group for Ailment Cappings
+          if (asT(getF(parent, ["Name"])) !== "Ailment Conditions") return;
+
+          const condId = parseId(getF(row, ["ID"]));
+          if (!condId) return;
+          const condName = asT(getF(row, ["Name"]));
+
+          const linkedRules = ruleConfigs.filter(
+            (r) => parseId(getF(r, ["BPConditionID"])) === condId
+          );
+
+          linkedRules.forEach((rule) => {
+            const remark = asT(getF(rule, ["Remarks"]));
+            const limits: string[] = [];
+            const lim1 = describeLimit("Individual Limit", getF(rule, ["IndividualLimit"]), getF(rule, ["IndividualPerc"]), getF(rule, ["IndividualClaimCount"]));
+            const lim2 = describeLimit("Claim Limit", getF(rule, ["ClaimLimit"]), getF(rule, ["ClaimPerc"]));
+            const lim3 = describeLimit("Overall Limit", getF(rule, ["ExternalValueAbs"]), getF(rule, ["ExternalValuePerc"]));
+            if (lim1) limits.push(lim1);
+            if (lim2) limits.push(lim2);
+            if (lim3) limits.push(lim3);
+            const fullText = [remark, ...limits].filter(Boolean).join(" | ");
+            if (fullText && !seen.has(fullText)) {
+              seen.add(fullText);
+              allCaps.push(`${condName}: ${fullText}`);
+            }
+          });
+        });
+
+        if (cancelled) return;
+        setAlignmentCappings(allCaps.length > 0 ? allCaps : []);
+
+        // ── AI summary for Ailment Cappings ──────────────────────────────
+        if (allCaps.length > 0) {
+          fetch("/api/benefit-section-summary", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ section: "ailment", rawText: allCaps.join("\n") }),
+          }).then(r => r.json()).then((d: { summary?: string }) => {
+            if (!cancelled && d.summary) setAilmentSummary(d.summary);
+          }).catch(() => {});
+        }
+
+        // ── Extract Exclusions from condition groups ─────────────────────
+        const exclusionLines: string[] = [];
+        conditions.forEach((row) => {
+          const parentId = parseId(getF(row, ["ParentID"]));
+          if (!parentId) return;
+          const parent = condById.get(parentId);
+          if (!parent) return;
+          const pName = asT(getF(parent, ["Name"]));
+          if (pName !== "Exclusions" && pName !== "Exceptions") return;
+          const condId = parseId(getF(row, ["ID"]));
+          if (!condId) return;
+          const condName = asT(getF(row, ["Name"]));
+          ruleConfigs.filter(r => parseId(getF(r, ["BPConditionID"])) === condId).forEach(rule => {
+            const remarks = asT(getF(rule, ["Remarks"]));
+            const lim1 = describeLimit("Individual Limit", getF(rule, ["IndividualLimit"]), getF(rule, ["IndividualPerc"]));
+            const parts = [remarks, lim1].filter(Boolean);
+            if (parts.length) exclusionLines.push(`${condName}: ${parts.join(" | ")}`);
+            else exclusionLines.push(condName);
+          });
+          // Include condition even if no rules — the name itself is the exclusion
+          if (ruleConfigs.filter(r => parseId(getF(r, ["BPConditionID"])) === condId).length === 0) {
+            exclusionLines.push(condName);
+          }
+        });
+        if (exclusionLines.length > 0) {
+          fetch("/api/benefit-section-summary", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ section: "exclusions", rawText: exclusionLines.join("\n") }),
+          }).then(r => r.json()).then((d: { summary?: string }) => {
+            if (!cancelled && d.summary) setExclusionsSummary(d.summary);
+          }).catch(() => {});
+        }
+
+        // ── Extract CoPay — rules linked directly to "General Copay" condition ─
+        const copayLines: string[] = [];
+        conditions.forEach((row) => {
+          const id   = parseId(getF(row, ["ID"]));
+          const name = asT(getF(row, ["Name"]));
+          if (name !== "General Copay" || !id) return;
+          ruleConfigs.filter(r => parseId(getF(r, ["BPConditionID"])) === id).forEach(rule => {
+            const parts: string[] = [];
+            const copayVal  = asT(getF(rule, ["CopayValue"]));
+            const copayPerc = asT(getF(rule, ["CopayPerc"]));
+            const remarks   = asT(getF(rule, ["Remarks"]));
+            if (copayVal)  parts.push(`Co-pay Amount: ${copayVal}`);
+            if (copayPerc) parts.push(`Co-pay Percent: ${copayPerc}%`);
+            if (remarks)   parts.push(remarks);
+            if (parts.length) {
+              copayLines.push(parts.join(" | "));
+              // Store concise display string — prefer remarks (already human-readable), then percent, then value
+              const display = remarks
+                ? remarks
+                : copayPerc ? `${copayPerc}% co-pay applicable`
+                : copayVal  ? `${copayVal}% co-pay applicable`
+                : null;
+              if (display && !cancelled) setCopayRawInfo(display);
+            }
+          });
+        });
+        if (copayLines.length > 0) {
+          fetch("/api/benefit-section-summary", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ section: "copay", rawText: copayLines.join("\n") }),
+          }).then(r => r.json()).then((d: { summary?: string }) => {
+            if (!cancelled && d.summary) setCopaySummary(d.summary);
+          }).catch(() => {});
+        }
+
+        if (allCaps.length === 0) return;
+
+        // Extract benefit plan limit via server-side route
+        if (!onBenefitPlanLimitExtracted) return;
+        try {
+          const limitRes = await fetch("/api/benefit-plan-limit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cappings: allCaps, diagnosis: diagnosis ?? "" }),
+          });
+          if (cancelled) return;
+          if (!limitRes.ok) { console.warn("[ClaimAI] benefit-plan-limit route failed:", limitRes.status); return; }
+          const parsed = await limitRes.json() as { benefitPlanLimit: number | null; notes: string };
+          console.log("[ClaimAI] benefitPlanLimit from DB:", parsed);
+          if (!cancelled) onBenefitPlanLimitExtracted(parsed.benefitPlanLimit, parsed.notes ?? "");
+        } catch (e) {
+          console.warn("[ClaimAI] benefit-plan-limit error:", e);
+        }
+
+
+      } catch (e) {
+        console.warn("[ClaimAI] benefit-plan useEffect error:", e);
+      }
     };
+
     void run();
     return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spectraFields?.availedAccommodationId, displayAnalysis]);
+  }, [claimId, diagnosis, onBenefitPlanLimitExtracted]);
 
-  const handleSave = async () => {
-    if (!editedAnalysis || !selectedFileResult) return;
+    // ───────────────────────────────────────────────────────────────────────────
 
-    setIsSaving(true);
-    try {
-      // Move pending changes to changelog before saving
-      // Group by tab+record+field to merge multiple changes to same field
-      // Get all entries (not reversed, so we can process chronologically)
-      const allPendingEntries = pendingChanges.getEntries().reverse(); // Reverse to get chronological order
-      const mergedEntries = new Map<
-        string,
-        {
-          tab: string;
-          record: string;
-          field: string;
-          originalValue: string;
-          finalValue: string;
-        }
-      >();
-
-      // Group entries by tab+record+field
-      const entriesByKey = new Map<string, typeof allPendingEntries>();
-      allPendingEntries.forEach((entry) => {
-        const key = `${entry.tab}|${entry.record}|${entry.field}`;
-        if (!entriesByKey.has(key)) {
-          entriesByKey.set(key, []);
-        }
-        entriesByKey.get(key)!.push(entry);
-      });
-
-      // For each field, use the first entry's previousValue and last entry's newValue
-      entriesByKey.forEach((entries, key) => {
-        // Entries are already in chronological order
-        const firstEntry = entries[0];
-        const lastEntry = entries[entries.length - 1];
-        mergedEntries.set(key, {
-          tab: firstEntry.tab,
-          record: firstEntry.record,
-          field: firstEntry.field,
-          originalValue: firstEntry.previousValue,
-          finalValue: lastEntry.newValue,
-        });
-      });
-
-      // Add merged entries to changelog
-      mergedEntries.forEach((entry) => {
-        changeLog.addEntry(
-          entry.tab,
-          entry.record,
-          entry.field,
-          entry.originalValue,
-          entry.finalValue,
-        );
-      });
-      // Clear pending changes after moving to changelog
-      pendingChanges.clear();
-      updateChangeLog();
-
-      // Serialize changelog entries for persistence
-      const changelogEntries = changeLog.serialize();
-
-      const recalculatedClaim = computeClaimCalculation(editedAnalysis);
-      const analysisToSave: PdfAnalysis = {
-        ...editedAnalysis,
-        baseInsurerPayable: recalculatedClaim.insurerPayable,
-        benefitAmount:
-          recalculatedClaim.benefitAmount ?? editedAnalysis.benefitAmount,
-        finalInsurerPayable:
-          recalculatedClaim.finalInsurerPayable ?? undefined,
-        finalInsurerPayableNotes:
-          recalculatedClaim.finalInsurerPayableNotes || undefined,
-      };
-
-      await updateResult({
-        filePath: selectedFileResult.filePath,
-        analysis: analysisToSave,
-        changelogEntries:
-          changelogEntries.length > 0 ? changelogEntries : undefined,
-      });
-
-      setEditedAnalysis(analysisToSave);
-
-      // Don't use alert() — it blocks postMessage flow in iframe context.
-      // Spectra will show its own toast via claimAISaveComplete postMessage.
-
-      // Send Refer to Insurer data — built from field mismatches + missing documents
-      // Uses buildQueryMessage() which checks:
-      //   1. Name/Age/Gender/Policy/Hospital/Date mismatches vs Spectra DB
-      //   2. Missing investigation reports from conditionTests
-      const referQuery = buildQueryMessage();
-      if (referQuery.message.trim()) {
-        window.parent.postMessage(
-          {
-            source:   "claimai",
-            type:     "setReferToInsurer",
-            remarks:  referQuery.message.trim(),
-          },
-          "*",
-        );
-      }
-
-      // Wait for Spectra to process all preceding postMessages before firing claimAISaveComplete
-      await new Promise(resolve => setTimeout(resolve, 800));
-
-      // Notify Spectra: save complete — read jobId from URL path /job/{jobId}
-      const urlJobId = typeof window !== "undefined"
-        ? window.location.pathname.split("/").filter(Boolean).pop() ?? ""
-        : "";
-      window.parent.postMessage(
-        { source: "claimai", type: "claimAISaveComplete", jobId: urlJobId },
-        "*",
-      );
-    } catch (error) {
-      console.error("Error saving:", error);
-      alert(
-        error instanceof Error
-          ? error.message
-          : "Failed to save changes. Please try again.",
-      );
-    } finally {
-      setIsSaving(false);
-    }
+  const normalizeAmount = (value: unknown): number | null =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? value
+      : null;
+  const isLensComponent = (name?: string | null, code?: string | null) =>
+    /lens|iol|implant/i.test(`${name || ""} ${code || ""}`);
+  const sumLensAmountFromTariff = (items?: TariffBreakdownItem[] | null) => {
+    if (!Array.isArray(items)) return null;
+    return items.reduce((sum, item) => {
+      const amount = normalizeAmount(item.amount);
+      if (amount === null) return sum;
+      return isLensComponent(item.name, item.code) ? sum + amount : sum;
+    }, 0);
+  };
+  const sumLensAmountFromHospital = (items?: HospitalBillBreakdownItem[] | null) => {
+    if (!Array.isArray(items)) return null;
+    return items.reduce((sum, item) => {
+      const amount = normalizeAmount(item.amount);
+      if (amount === null) return sum;
+      return isLensComponent(item.name) ? sum + amount : sum;
+    }, 0);
   };
 
-  const hasChanges = useMemo(() => {
-    if (!editedAnalysis || !selectedAnalysis) return false;
-    return JSON.stringify(editedAnalysis) !== JSON.stringify(selectedAnalysis);
-  }, [editedAnalysis, selectedAnalysis]);
+  // ── Editable breakdown rows ───────────────────────────────────────────────
+  type EditableRow = { id: string; name: string; amount: string; pdfText?: string; pdfPageNumber?: number; pdfRowTopPct?: number; pdfRowBottomPct?: number };
 
-  const changeLogEntries = useMemo(
-    () => changeLog.getEntries(),
-    [changeLogVersion, changeLog],
+  const toEditableRows = (items: HospitalBillBreakdownItem[]): EditableRow[] =>
+    items.map((item, i) => ({
+      id: `h-${i}`,
+      name: item.name ?? "",
+      amount: item.amount != null ? String(item.amount) : "",
+    }));
+
+  const toEditableTariffRows = (items: TariffBreakdownItem[]): EditableRow[] =>
+    items.map((item, i) => ({
+      id: `t-${i}`,
+      name: item.name ?? "",
+      amount: item.amount != null ? String(item.amount) : "",
+      pdfText: (item as any).pdfText ?? undefined,
+      pdfPageNumber: (item as any).pdfPageNumber ?? undefined,
+      pdfRowTopPct: (item as any).pdfRowTopPct ?? undefined,
+      pdfRowBottomPct: (item as any).pdfRowBottomPct ?? undefined,
+    }));
+
+  const [hospitalRows, setHospitalRows] = useState<EditableRow[]>([]);
+  const [tariffRows, setTariffRows]     = useState<EditableRow[]>([]);
+  const [hospitalInit, setHospitalInit] = useState(false);
+  const [tariffInit, setTariffInit]     = useState(false);
+
+  // Initialise from props once data arrives
+  useEffect(() => {
+    if (!hospitalInit && Array.isArray(hospitalBillBreakdown) && hospitalBillBreakdown.length > 0) {
+      setHospitalRows(toEditableRows(hospitalBillBreakdown));
+      setHospitalInit(true);
+    }
+  }, [hospitalBillBreakdown, hospitalInit]);
+
+  useEffect(() => {
+    const tariffSrc = Array.isArray(tariffExtractionItem) ? tariffExtractionItem : [];
+    if (!tariffInit && tariffSrc.length > 0) {
+      setTariffRows(toEditableTariffRows(tariffSrc));
+      setTariffInit(true);
+    }
+  }, [tariffExtractionItem, tariffInit]);
+
+  // Computed totals from editable rows
+  const hospitalRowsTotal = hospitalRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+  const tariffRowsTotal   = tariffRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+
+  const addHospitalRow = () =>
+    setHospitalRows(rows => [...rows, { id: `h-${Date.now()}`, name: "", amount: "" }]);
+  const addTariffRow = () =>
+    setTariffRows(rows => [...rows, { id: `t-${Date.now()}`, name: "", amount: "" }]);
+
+  const updateHospitalRow = (id: string, field: "name" | "amount", val: string) =>
+    setHospitalRows(rows => rows.map(r => r.id === id ? { ...r, [field]: val } : r));
+  const updateTariffRow = (id: string, field: "name" | "amount", val: string) =>
+    setTariffRows(rows => rows.map(r => r.id === id ? { ...r, [field]: val } : r));
+
+  const deleteHospitalRow = (id: string) =>
+    setHospitalRows(rows => rows.filter(r => r.id !== id));
+  const deleteTariffRow = (id: string) =>
+    setTariffRows(rows => rows.filter(r => r.id !== id));
+
+  // Manual overrides (kept for backward compat with onAmountsChange)
+  const [editedClaimedAmount] = useState<string | null>(null);
+  const [editedTariffAmount]  = useState<string | null>(null);
+
+  // ── Previous Claims ────────────────────────────────────────────────────────
+  type PreviousClaim = {
+    claimId: string; slNo: number; admissionDate: string | null;
+    dischargeDate: string | null; diagnosis: string | null;
+    treatment: string | null; complaint: string | null;
+    billAmount: number | null; approvedAmount: number | null;
+    hospital: string | null; status: string | null;
+  };
+  const [prevClaims, setPrevClaims]       = useState<PreviousClaim[]>([]);
+  const [prevClaimsLoading, setPrevLoading] = useState(false);
+  const [prevClaimsError, setPrevError]   = useState<string | null>(null);
+  const [prevClaimsExpanded, setPrevExpanded] = useState(false);
+  const [ailmentSummary,    setAilmentSummary]    = useState<string | null>(null);
+  const [copayRawInfo,      setCopayRawInfo]      = useState<string | null>(null);
+  const [exclusionsSummary, setExclusionsSummary] = useState<string | null>(null);
+  const [copaySummary,      setCopaySummary]      = useState<string | null>(null);
+  const [similarityResult, setSimilarityResult] = useState<{
+    isSimilar: boolean;
+    similarityReason: string;
+    recommendedAmount: number | null;
+    recommendationBasis: string;
+    confidence: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!claimId) return;
+    setPrevLoading(true);
+    const params = new URLSearchParams({ claimId });
+    if (memberPolicyId) params.set("memberPolicyId", memberPolicyId);
+    fetch(`/api/previous-claims?${params.toString()}`)
+      .then((r) => r.json())
+      .then(async (data) => {
+        const claims: PreviousClaim[] = data.claims ?? [];
+        setPrevClaims(claims);
+        setPrevError(null);
+
+        // Check similarity with latest previous claim
+        if (claims.length > 0 && diagnosis && onBenefitPlanLimitExtracted) {
+          const latest = claims[0];
+          try {
+            const simRes = await fetch("/api/previous-claim-similarity", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                currentClaim: {
+                  diagnosis:   diagnosis ?? "",
+                  treatment:   "",
+                  complaint:   "",
+                  billAmount:  null,
+                  hospital:    "",
+                },
+                previousClaim: latest,
+                benefitPlanLimit: dbBenefitPlanLimit ?? null,
+              }),
+            });
+            if (simRes.ok) {
+              const simData = await simRes.json() as {
+                isSimilar: boolean;
+                similarityReason: string;
+                recommendedAmount: number | null;
+                recommendationBasis: string;
+                confidence: string;
+              };
+              console.log("[ClaimAI] ── Previous Claim Similarity Result ──");
+              console.log("[ClaimAI] isSimilar:", simData.isSimilar);
+              console.log("[ClaimAI] similarityReason:", simData.similarityReason);
+              console.log("[ClaimAI] recommendedAmount:", simData.recommendedAmount);
+              console.log("[ClaimAI] recommendationBasis:", simData.recommendationBasis);
+              console.log("[ClaimAI] confidence:", simData.confidence);
+              if (simData.isSimilar && simData.recommendedAmount) {
+                console.log("[ClaimAI] ACTION: Overriding approved amount with min(prevApproved=" + simData.recommendedAmount + ", currentBill)");
+              } else {
+                console.log("[ClaimAI] ACTION: No override — proceeding with normal tariff/benefit plan calculation");
+              }
+              setSimilarityResult(simData);
+              // Don't change benefit plan amount — just store similarity result for reason line
+            }
+          } catch (e) {
+            console.warn("[ClaimAI] Previous claim similarity error:", e);
+          }
+        }
+      })
+      .catch((e) => setPrevError(String(e)))
+      .finally(() => setPrevLoading(false));
+  }, [memberPolicyId, claimId]);
+
+  const hospitalAmount = normalizeAmount(financialSummaryTotals.hospitalBillAfterDiscount);
+  const benefitTotal = normalizeAmount(benefitAmount);
+  const tariffItems = Array.isArray(tariffExtractionItem) ? tariffExtractionItem : [];
+  const tariffItemsTotal = tariffItems.reduce(
+    (sum, item) => sum + (normalizeAmount(item.amount) ?? 0), 0,
   );
+  const effectiveTariffTotal = tariffItems.length > 0 ? tariffItemsTotal : null;
 
-  const fileName = selectedFileResult
-    ? getBasename(selectedFileResult.filePath)
-    : "—";
+  // Effective amounts — row totals take priority, then manual edit, then extracted
+  const effectiveClaimedAmount =
+    hospitalInit && hospitalRows.length > 0 ? hospitalRowsTotal
+    : editedClaimedAmount !== null ? (parseFloat(editedClaimedAmount) || 0)
+    : hospitalAmount;
+  const effectiveTariffAmount =
+    tariffInit && tariffRows.length > 0 ? tariffRowsTotal
+    : editedTariffAmount !== null ? (parseFloat(editedTariffAmount) || 0)
+    : effectiveTariffTotal;
+  const tariffLensAmount = sumLensAmountFromTariff(tariffItems);
+  const hospitalLensAmount = sumLensAmountFromHospital(hospitalBillBreakdown);
+  const tariffWithoutLens =
+    tariffLensAmount !== null && effectiveTariffTotal !== null
+      ? Math.max(effectiveTariffTotal - tariffLensAmount, 0) : null;
+  const hospitalWithoutLens =
+    hospitalAmount !== null && hospitalLensAmount !== null
+      ? Math.max(hospitalAmount - hospitalLensAmount, 0) : null;
 
-  const handleAnalysisUpdate = (
-    updater: (analysis: PdfAnalysis) => PdfAnalysis,
-  ) => {
-    setEditedAnalysis((prev) => {
-      const base = prev || selectedAnalysis;
-      if (!base) return prev;
-      const updated = updater({ ...base });
-      return updated;
-    });
-  };
+  const completePackage = isAllInclusivePackage;
 
-  // Show processing logs when:
-  // 1. Currently processing
-  // 2. Status is idle
-  // 3. No analysis available (regardless of status) - this includes error cases
-  const hasLogs = (state?.logs?.length ?? 0) > 0;
-  const isAwaitingResults =
-    isProcessing || state?.status === "idle" || !selectedAnalysis;
-  const shouldShowProcessingLogs =
-    !showSampleData && (isAwaitingResults || isLogsPanelForced);
-  const canToggleLogsPanel = !showSampleData && !isAwaitingResults && hasLogs;
-
-  useEffect(() => {
-    if (
-      (!hasLogs || showSampleData) &&
-      isLogsPanelForced &&
-      !isAwaitingResults
-    ) {
-      setIsLogsPanelForced(false);
-    }
-  }, [hasLogs, isLogsPanelForced, isAwaitingResults, showSampleData]);
-
-  const handlePdfWidthChange = (width: number) => {
-    setPdfWidth(width);
-  };
-
-  useEffect(() => {
-    const container = reportScrollRef.current;
-    if (!container) return;
-
-    const sectionElements = reportSections
-      .map((section) => document.getElementById(section.id))
-      .filter((el): el is HTMLElement => Boolean(el));
-
-    if (sectionElements.length === 0) return;
-
-    let raf = 0;
-    const updateActive = () => {
-      raf = 0;
-      const containerTop = container.getBoundingClientRect().top;
-      const activationOffset = 80;
-      let current = sectionElements[0].id;
-
-      for (const section of sectionElements) {
-        const offset = section.getBoundingClientRect().top - containerTop;
-        if (offset <= activationOffset) {
-          current = section.id;
-        } else {
-          break;
-        }
+  const totalAmountApproved =
+    claimCalculation?.totalAmountApproved ??
+    normalizeAmount(finalInsurerPayable) ??
+    (() => {
+      if (completePackage) {
+        if (hospitalAmount === null || effectiveTariffTotal === null) return null;
+        const packageMin = Math.min(hospitalAmount, effectiveTariffTotal);
+        return benefitTotal === null ? packageMin : Math.min(packageMin, benefitTotal);
       }
+      if (tariffWithoutLens === null || hospitalWithoutLens === null ||
+          tariffLensAmount === null || hospitalLensAmount === null) {
+        if (hospitalAmount === null || effectiveTariffTotal === null) return null;
+        const fallbackMin = Math.min(hospitalAmount, effectiveTariffTotal);
+        return benefitTotal === null ? fallbackMin : Math.min(fallbackMin, benefitTotal);
+      }
+      const baseAmount = Math.min(tariffWithoutLens, hospitalWithoutLens);
+      const lensAmount = Math.min(tariffLensAmount, 10000, hospitalLensAmount);
+      const nonPackageTotal = baseAmount + lensAmount;
+      return benefitTotal === null ? nonPackageTotal : Math.min(nonPackageTotal, benefitTotal);
+    })();
 
-      setActiveSection(current);
-    };
+  // Notify parent whenever effective amounts change (rows edited, added, deleted)
+  useEffect(() => {
+    if (onAmountsChange) {
+      onAmountsChange(effectiveClaimedAmount, effectiveTariffAmount, editedApprovedAmount);
+    }
+  }, [hospitalRows, tariffRows, editedClaimedAmount, editedTariffAmount]);
 
-    const onScroll = () => {
-      if (raf) return;
-      raf = window.requestAnimationFrame(updateActive);
-    };
+  // ── BSI derived values ──────────────────────────────────────────────────────
+  const bsiBaseSI =
+    bsiData?.Suminsured?.find((r) => r.SICategery === 69) ??
+    bsiData?.Suminsured?.[0] ?? null;
+  const bsiEffectiveBalance: number | null =
+    typeof bsiBaseSI?.EffectiveBalance === "number" ? bsiBaseSI.EffectiveBalance : null;
 
-    const onResize = () => {
-      updateActive();
-    };
+  // Recalculate approved amount from edited values — placed here after bsiEffectiveBalance
+  const editedApprovedAmount: number | null = (() => {
+    const claimed = effectiveClaimedAmount ?? null;
+    const tariff  = effectiveTariffAmount  ?? null;
 
-    container.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onResize);
-    updateActive();
+    // If a similar previous claim exists — approve min(previousApproved, currentBill)
+    // This overrides tariff and benefit plan limits entirely
+    if (similarityResult?.isSimilar && similarityResult.recommendedAmount && claimed !== null) {
+      const prevApproved = similarityResult.recommendedAmount;
+      const simApproved  = Math.min(prevApproved, claimed);
+      return bsiEffectiveBalance !== null ? Math.min(simApproved, bsiEffectiveBalance) : simApproved;
+    }
 
-    return () => {
-      container.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", onResize);
-      if (raf) window.cancelAnimationFrame(raf);
-    };
-  }, [reportSections, selectedFileResult?.filePath]);
+    if (claimed === null && tariff === null) return null;
+    let base: number;
+    if (claimed !== null && tariff !== null) base = Math.min(claimed, tariff);
+    else base = (claimed ?? tariff) as number;
+    const withBenefit: number = benefitTotal !== null ? Math.min(base, benefitTotal) : base;
+    return bsiEffectiveBalance !== null ? Math.min(withBenefit, bsiEffectiveBalance) : withBenefit;
+  })();
+
+  const bsiCappedPayable: number | null =
+    totalAmountApproved !== null && bsiEffectiveBalance !== null
+      ? Math.min(totalAmountApproved, bsiEffectiveBalance)
+      : totalAmountApproved;
+  const bsiCapApplied: boolean =
+    bsiCappedPayable !== null && totalAmountApproved !== null &&
+    bsiCappedPayable < totalAmountApproved;
+  // ───────────────────────────────────────────────────────────────────────────
+
+  const lensTypeValue = lensType?.trim() || null;
+  const lensApproved: LensTypeApproval | null = lensTypeApproved ?? null;
+
+  const formatBoolean = (value: boolean) => (value ? "Yes" : "No");
+  const formatLensTypeApproved = (value: LensTypeApproval | null) =>
+    value === null ? "—" : value === "cant determine" ? "cant determine" : value ? "Yes" : "No";
+  const formatDisplayAmount = (value: number | null) =>
+    value === null ? "—" : `INR ${formatAmountValue(value)}`;
+  const formatAppliedRule = (value?: string | null) => {
+    switch (value) {
+      case "policy_limit_or_hospital_package_lower": return "Lower of policy cataract limit and hospital package/R&C";
+      case "no_policy_limit_use_hospital_package": return "No policy limit, so hospital package selected";
+      case "no_policy_limit_package_excludes_lens": return "No policy limit and package excludes lens, so procedure package plus lens R&C applied";
+      case "niac_no_policy_limit_lens_excluded": return "NIAC rule with no policy limit and package excludes lens, capped at INR 50,000";
+      case "niac_flexi_floater_cap_24000": return "NIAC Flexi Floater cataract cap applied at INR 24,000";
+      case "psu_retail_upto_5l_package_plus_lens": return "PSU retail up to 5L: package plus monofocal lens";
+      case "psu_corporate_above_5l_package_plus_lens": return "PSU corporate above 5L: package plus monofocal lens";
+      case "psu_corporate_above_5l_no_cataract_limit_cap_45000": return "PSU corporate above 5L with no cataract limit: capped at INR 45,000";
+      case "psu_no_policy_limit_package_plus_lens": return "PSU no policy limit: package plus monofocal lens";
+      case "no_policy_limit_no_package_lens_rc_only": return "No policy limit or package, so lens R&C only applied";
+      case "policy_limit_without_package": return "Policy cataract limit applied without package reference";
+      case "billed_amount_only": return "Billed amount applied";
+      case "standard_billed_or_tariff": return "Standard billed/tariff calculation";
+      default: return "—";
+    }
+  };
+
+  const lensTypeLinkable = !!lensTypePageNumber && !!onTariffAmountClick;
+  const goToLensTypePage = () => { if (lensTypePageNumber && onTariffAmountClick) onTariffAmountClick(lensTypePageNumber); };
+  const hospitalLinkable = !!hospitalBillPageNumber && !!onHospitalAmountClick;
+  const tariffLinkable = !!tariffPageNumber && !!onTariffAmountClick;
+  const goToHospitalPage = () => { if (hospitalBillPageNumber && onHospitalAmountClick) onHospitalAmountClick(hospitalBillPageNumber); };
+  const goToTariffPage = () => { if (tariffPageNumber && onTariffAmountClick) onTariffAmountClick(tariffPageNumber); };
 
   return (
-    <main className="flex-1 w-full h-full overflow-hidden">
-      <ResizablePanelGroup orientation="horizontal" className="h-full">
-        {/* Tabs Content - Left Side */}
-        <ResizablePanel
-          defaultSize={40}
-          className="flex h-full min-w-0 flex-col overflow-hidden border-r border-slate-200/80 bg-gradient-to-b from-slate-50 to-white"
-        >
-          {shouldShowProcessingLogs ? (
-            <ProcessingLogs
-              isProcessing={isProcessing}
-              state={state}
-              showLogs={logContentVisible}
-              onToggleLogs={setLogContentVisible}
-              logs={logs}
-            />
-          ) : selectedFileResult && selectedAnalysis ? (
-            <div className="flex h-full w-full flex-col overflow-hidden">
-              <div className="sticky top-0 z-10 w-full bg-background px-3 py-2">
-                <div>
-                  <div className="group/tabs" data-orientation="horizontal">
-                    <div
-                      data-slot="tabs-list"
-                      data-variant="default"
-                      className={cn(
-                        tabsListVariants({ variant: "default" }),
-                         "grid w-full grid-cols-3",
-                      )}
-                    >
-                      {reportSections.map((section) => (
-                        <button
-                          key={section.id}
-                          type="button"
-                          data-active={
-                            activeSection === section.id ? true : undefined
-                          }
-                          onClick={() => {
-                            const target = document.getElementById(section.id);
-                            if (target) {
-                              setActiveSection(section.id);
-                              target.scrollIntoView({
-                                behavior: "smooth",
-                                block: "start",
-                              });
-                            }
-                            // Fix 10: when clicking Summary (Benefit Extraction), open Benefit Plan on right panel
-                            if (section.id === "financialSummary") {
-                              setActivePdfFile("benefitPlan");
-                            }
-                          }}
-                           className={cn(
-                             "gap-1.5 rounded-md border border-transparent px-1.5 py-1 text-sm font-medium group-data-[variant=default]/tabs-list:data-active:shadow-sm group-data-[variant=line]/tabs-list:data-active:shadow-none [&_svg:not([class*='size-'])]:size-4 focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:outline-ring text-foreground/60 hover:text-foreground dark:text-muted-foreground dark:hover:text-foreground relative inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center whitespace-nowrap transition-all group-data-[orientation=vertical]/tabs:w-full group-data-[orientation=vertical]/tabs:justify-start focus-visible:ring-[3px] focus-visible:outline-1 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
-                             "group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-active:bg-transparent dark:group-data-[variant=line]/tabs-list:data-active:border-transparent dark:group-data-[variant=line]/tabs-list:data-active:bg-transparent",
-                             "data-active:bg-background dark:data-active:text-foreground dark:data-active:border-input dark:data-active:bg-input/30 data-active:text-foreground",
-                             "after:bg-foreground after:absolute after:opacity-0 after:transition-opacity group-data-[orientation=horizontal]/tabs:after:inset-x-0 group-data-[orientation=horizontal]/tabs:after:bottom-[-5px] group-data-[orientation=horizontal]/tabs:after:h-0.5 group-data-[orientation=vertical]/tabs:after:inset-y-0 group-data-[orientation=vertical]/tabs:after:-right-1 group-data-[orientation=vertical]/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-active:after:opacity-100",
-                            )}
-                        >
-                          {section.label}
-                        </button>
-                      ))}
-                    </div>
+    <Card>
+      <CardHeader>
+        <CardTitle>Financial Summary</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="flex flex-col gap-4">
+
+          {/* Hospital bill extraction */}
+          <Card className="bg-white border-2">
+            <CardContent>
+              <div className="mb-2 flex items-center justify-between gap-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                <span>Hospital bill extraction</span>
+                {hospitalLinkable && (
+                  <button type="button" onClick={goToHospitalPage} className="normal-case text-xs font-medium text-blue-600">
+                    Page {hospitalBillPageNumber}
+                  </button>
+                )}
+              </div>
+              <div className="space-y-1">
+                {(hospitalRows.length > 0 ? hospitalRows : []).map((row) => (
+                  <div key={row.id} className="flex items-center gap-1 text-sm group">
+                    <input
+                      className="flex-1 min-w-0 border border-transparent group-hover:border-gray-300 rounded px-1 py-0.5 text-gray-700 bg-transparent focus:border-blue-400 focus:bg-white outline-none text-sm"
+                      value={row.name}
+                      placeholder="Item name"
+                      onChange={(e) => updateHospitalRow(row.id, "name", e.target.value)}
+                    />
+                    <input
+                      className="w-24 text-right border border-transparent group-hover:border-gray-300 rounded px-1 py-0.5 font-medium text-gray-900 bg-transparent focus:border-blue-400 focus:bg-white outline-none text-sm"
+                      value={row.amount}
+                      placeholder="0"
+                      type="number"
+                      onChange={(e) => updateHospitalRow(row.id, "amount", e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => deleteHospitalRow(row.id)}
+                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 px-1 text-xs transition-opacity"
+                      title="Delete row"
+                    >✕</button>
                   </div>
+                ))}
+                {hospitalRows.length === 0 && !hospitalInit && hospitalAmount !== null && (
+                  <div className="text-sm text-gray-700">Amount: {formatDisplayAmount(hospitalAmount)}</div>
+                )}
+                {/* Total row */}
+                {hospitalRows.length > 0 && (
+                  <div className="flex items-center justify-between text-sm font-semibold border-t border-gray-200 pt-1 mt-1">
+                    <span className="text-gray-700">Total</span>
+                    <span className="text-gray-900">{formatDisplayAmount(hospitalRowsTotal)}</span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={addHospitalRow}
+                  className="mt-1 text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
+                >
+                  <span>＋</span> Add row
+                </button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Tariff extraction */}
+          <Card className="bg-green-50 border-2 border-green-200">
+            <CardContent>
+              <div className="mb-2 flex items-center justify-between gap-3 text-sm font-semibold uppercase tracking-wide text-green-700">
+                <span>Tariff extraction</span>
+                {tariffLinkable && (
+                  <button type="button" onClick={goToTariffPage} className="normal-case text-xs font-medium text-blue-600">
+                    Page {tariffPageNumber}
+                  </button>
+                )}
+              </div>
+              {tariffFileName && (
+                <p className="text-xs text-green-600 mb-2 truncate" title={tariffFileName}>
+                  📄 {tariffFileName.replace(/\.pdf$/i, "")}
+                </p>
+              )}
+              <div className="space-y-1 border-t border-green-200 pt-2">
+                {tariffRows.map((row) => {
+                  const canHighlight = tariffLinkable && !!row.amount;
+                  const handleRowClick = () => {
+                    if (canHighlight) {
+                      // Always pass both name and text for best highlight matching
+                      const page = row.pdfPageNumber ?? tariffPageNumber;
+                      const searchText = row.pdfText ?? row.amount;
+                      const searchName = row.name; // always pass name so Strategy A can find the row
+                      onTariffAmountClick?.(page, searchText, searchName, row.pdfRowTopPct, row.pdfRowBottomPct);
+                    }
+                  };
+                  return (
+                  <div
+                    key={row.id}
+                    className={`tariff-row-clickable flex items-center gap-1 text-sm group${canHighlight ? " cursor-pointer hover:bg-green-100 rounded" : ""}`}
+                    title={canHighlight ? "Click to highlight in tariff PDF" : undefined}
+                    onClick={handleRowClick}
+                  >
+                    <input
+                      className="flex-1 min-w-0 border border-transparent group-hover:border-green-300 rounded px-1 py-0.5 text-green-700 bg-transparent focus:border-blue-400 focus:bg-white outline-none text-sm"
+                      value={row.name}
+                      placeholder="Item name"
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => updateTariffRow(row.id, "name", e.target.value)}
+                    />
+                    <input
+                      className="w-24 text-right border border-transparent group-hover:border-green-300 rounded px-1 py-0.5 font-medium text-green-900 bg-transparent focus:border-blue-400 focus:bg-white outline-none text-sm"
+                      value={row.amount}
+                      placeholder="0"
+                      type="number"
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => updateTariffRow(row.id, "amount", e.target.value)}
+                    />
+                    {canHighlight && (
+                      <span className="opacity-0 group-hover:opacity-60 text-blue-500 text-xs px-1 select-none" title="Highlight in tariff PDF">↗</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); deleteTariffRow(row.id); }}
+                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 px-1 text-xs transition-opacity"
+                      title="Delete row"
+                    >✕</button>
+                  </div>
+                  );
+                })}
+                {tariffRows.length === 0 && (
+                  <div className="text-sm text-green-700">—</div>
+                )}
+                {/* Total row */}
+                {tariffRows.length > 0 && (
+                  <div className="flex items-center justify-between text-sm font-semibold border-t border-green-200 pt-1 mt-1">
+                    <span className="text-green-700">Total</span>
+                    <span className="text-green-900">{formatDisplayAmount(tariffRowsTotal)}</span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={addTariffRow}
+                  className="mt-1 text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
+                >
+                  <span>＋</span> Add row
+                </button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Benefit extraction */}
+          <Card className="bg-white border-2">
+            <CardContent>
+              <div
+                className={`mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground ${onBenefitExtractionClick ? "cursor-pointer hover:text-blue-600 transition-colors" : ""}`}
+                onClick={() => onBenefitExtractionClick?.()}
+                title={onBenefitExtractionClick ? "Click to open Benefit Plan" : undefined}
+              >
+                Benefit extraction {onBenefitExtractionClick && <span className="text-xs text-blue-500 normal-case">↗ View Benefit Plan</span>}
+              </div>
+              {/* Three small sections inside Benefit Extraction */}
+              <div className="space-y-2">
+
+                {/* 1. Ailment Cappings */}
+                {(ailmentSummary || alignmentCappings.length > 0) && (
+                  <div className="rounded border border-blue-100 bg-blue-50 p-2">
+                    <div className="text-xs font-semibold text-blue-700 mb-1">Ailment Cappings</div>
+                    <p className="text-xs text-gray-700">
+                      {ailmentSummary ?? "Loading summary..."}
+                    </p>
+                  </div>
+                )}
+
+                {/* 2. Exclusions */}
+                {exclusionsSummary && (
+                  <div className="rounded border border-red-100 bg-red-50 p-2">
+                    <div className="text-xs font-semibold text-red-700 mb-1">Exclusions</div>
+                    <p className="text-xs text-gray-700">{exclusionsSummary}</p>
+                  </div>
+                )}
+
+                {/* 3. CoPay */}
+                {copaySummary && (
+                  <div className="rounded border border-orange-100 bg-orange-50 p-2">
+                    <div className="text-xs font-semibold text-orange-700 mb-1">Co-Pay</div>
+                    <p className="text-xs text-gray-700">{copaySummary}</p>
+                  </div>
+                )}
+
+                {/* Empty state */}
+                {alignmentCappings.length === 0 && !ailmentSummary && !exclusionsSummary && !copaySummary && (
+                  <p className="text-xs text-muted-foreground italic">No benefit extraction data available.</p>
+                )}
+
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Balance Sum Insured */}
+          <Card className="border-2 border-slate-300 bg-slate-50">
+            <CardContent className="pt-4">
+              <div className="mb-3">
+                <div className="text-sm font-semibold uppercase tracking-wide text-slate-700">
+                  Balance Sum Insured
                 </div>
               </div>
-              <div
-                ref={reportScrollRef}
-                className="flex-1 overflow-y-auto scroll-smooth scroll-pt-0 px-3 pb-8 pt-3"
-              >
-                <section id="patient" className="py-2">
-                  <PatientInfoTab
-                    fileName={fileName}
-                    claimId={state?.claimId}
-                    displayAnalysis={displayAnalysis || null}
-                    hasChanges={hasChanges}
-                    isSaving={isSaving}
-                    onSave={handleSave}
-                    onUpdateAnalysis={handleAnalysisUpdate}
-                    addChangeLogEntry={addChangeLogEntry}
-                    onScrollToPage={handleScrollToPage}
-                    availedAccommodation={availedAccommodation || null}
-                    approvedAccommodation="Day-care"
-                  />
-                </section>
-                <section id="medicalAdmissibility" className="py-2">
-                  <MedicalAdmissibilityTab
-                    fileName={fileName}
-                    medicalAdmissibility={displayAnalysis?.medicalAdmissibility}
-                    onScrollToPage={handleScrollToPage}
-                    presentingComplaint={presentingComplaint}
-                    onPresentingComplaintChange={setPresentingComplaint}
-                    onLastIcdCodeChange={setLastIcdCodeFromTab}
-                  />
-                </section>
-                <section id="financialSummary" className="py-2">
-                  <FinancialSummaryTab
-                    fileName={fileName}
-                    claimCalculation={claimCalculation}
-                    financialSummaryTotals={financialSummaryTotals}
-                    onBenefitExtractionClick={() => setActivePdfFile("benefitPlan")}
-                    diagnosis={selectedAnalysis?.medicalAdmissibility?.diagnosis ?? null}
-                    finalInsurerPayable={finalInsurerPayable}
-                    finalInsurerPayableNotes={finalInsurerPayableNotes}
-                    formatAmountValue={formatAmountValue}
-                    lensType={displayAnalysis?.lensType}
-                    lensTypePageNumber={displayAnalysis?.lensTypePageNumber}
-                    lensTypeApproved={displayAnalysis?.lensTypeApproved}
-                    eyeType={displayAnalysis?.eyeType}
-                    isAllInclusivePackage={displayAnalysis?.isAllInclusivePackage ?? false}
-                    tariffPageNumber={displayAnalysis?.tariffPageNumber}
-                    tariffFileName={tariffFileNameProp ?? displayAnalysis?.tariffFileName}
-                    tariffNotes={displayAnalysis?.tariffNotes}
-                    tariffClarificationNote={displayAnalysis?.tariffClarificationNote}
-                    tariffExtractionItem={displayAnalysis?.tariffExtractionItem}
-                    hospitalBillBreakdown={displayAnalysis?.hospitalBillBreakdown}
-                    hospitalBillPageNumber={displayAnalysis?.totalAmount?.pageNumber}
-                    benefitAmount={dbBenefitPlanLimit ?? claimCalculation?.benefitAmount ?? displayAnalysis?.benefitAmount}
-                    onBenefitPlanLimitExtracted={(limit) => { if (limit) setDbBenefitPlanLimit(limit); }}
-                    dbBenefitPlanLimit={dbBenefitPlanLimit}
-                    onHospitalAmountClick={(pageNumber) => {
-                      if (pageNumber) {
-                        handleScrollToPage(pageNumber);
-                      }
-                    }}
-                    onTariffAmountClick={handleScrollToTariffPage}
-                    claimId={state?.claimId}
-                    memberPolicyId={(spectraFields?.memberPolicyId as string | undefined) ?? undefined}
-                    onAmountsChange={(claimed, tariff, approved) =>
-                      setEditedAmounts({ claimed, tariff, approved })
-                    }
-                  />
-                </section>
 
-                <div className="mt-4 space-y-2">
-                  <label className="text-sm font-medium text-gray-700">
-                    Processing Remarks
-                  </label>
-                  <textarea
-                    value={processingRemarks}
-                    onChange={(e) => setProcessingRemarks(e.target.value)}
-                    placeholder="Enter processing remarks..."
-                    rows={3}
-                    className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 resize-none"
-                  />
+              {bsiLoading && (
+                <div className="text-xs text-slate-500 animate-pulse">
+                  Fetching live SI balance...
                 </div>
-                <div className="mt-4 space-y-2">
-                  <label className="text-sm font-medium text-gray-700">
-                    Processing Doctor Notes
-                  </label>
-                  <textarea
-                    value={doctorNotes}
-                    onChange={(e) => setDoctorNotes(e.target.value)}
-                    placeholder="Doctor notes..."
-                    rows={3}
-                    className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 resize-none"
-                  />
+              )}
+
+              {bsiError && !bsiLoading && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  <span className="font-semibold">BSI not available: </span>{bsiError}
                 </div>
-                <div className="mt-4 border-t border-border/80 py-4">
-                  <SaveDropdown
-                    onSave={async () => {
-                      await sendAccommodationToSpectra();
-                      await handleSave();
-                    }}
-                    onSaveAndRaiseQuery={async () => {
-                      await sendAccommodationToSpectra();
-                      await handleSave();
-                      const q = buildQueryMessage();
-                      if (q.type) setQueryType(q.type);
-                      if (q.message) setQueryMessage(q.message);
-                      setIsQueryDialogOpen(true);
-                    }}
-                    onDontSaveAndRaiseQuery={async () => {
-                      await sendAccommodationToSpectra();
-                      const q = buildQueryMessage();
-                      if (q.type) setQueryType(q.type);
-                      if (q.message) setQueryMessage(q.message);
-                      setIsQueryDialogOpen(true);
-                    }}
-                    isSaving={isSaving}
-                  />
-                </div>
-                {isQueryDialogOpen ? (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-                    <div className="w-full max-w-xl rounded-xl border border-border bg-background p-4 shadow-lg">
-                      <div className="mb-3 text-base font-semibold">Raise Query</div>
-                      <div className="space-y-3">
-                        <div className="space-y-1.5">
-                          <div className="text-sm font-medium">Query Type</div>
-                          <Select value={queryType} onValueChange={setQueryType}>
-                            <SelectTrigger className="w-full">
-                              <SelectValue placeholder="Select query type" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="documentation">Documentation</SelectItem>
-                              <SelectItem value="coding">Coding Clarification</SelectItem>
-                              <SelectItem value="billing">Billing Clarification</SelectItem>
-                              <SelectItem value="clinical">Clinical Clarification</SelectItem>
-                              <SelectItem value="policy">Policy Clarification</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="space-y-1.5">
-                          <div className="text-sm font-medium">Query Details</div>
-                          <textarea
-                            value={queryMessage}
-                            onChange={(event) => setQueryMessage(event.target.value)}
-                            placeholder="Enter query details..."
-                            className="border-input focus-visible:border-ring focus-visible:ring-ring/50 min-h-28 w-full rounded-lg border bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-[3px]"
-                          />
-                        </div>
-                        <div className="flex items-center justify-end gap-2 pt-1">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => setIsQueryDialogOpen(false)}
+              )}
+
+              {bsiData && !bsiLoading && (
+                <div className="space-y-3">
+                  {/* Main SI table */}
+                  <div className="overflow-x-auto rounded-md border border-slate-200">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-slate-700 text-white">
+                          <th className="px-2 py-1.5 text-left font-semibold">BPSI ID</th>
+                          <th className="px-2 py-1.5 text-right font-semibold">Sum Insured</th>
+                          <th className="px-2 py-1.5 text-right font-semibold">Utilized</th>
+                          <th className="px-2 py-1.5 text-right font-semibold">Blocked</th>
+                          <th className="px-2 py-1.5 text-right font-semibold">Reserved</th>
+                          <th className="px-2 py-1.5 text-right font-semibold text-emerald-300">Balance</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {bsiData.Suminsured.map((row, idx) => (
+                          <tr
+                            key={`bsi-${row.BPSIID}-${idx}`}
+                            className={row.SICategery === 69 ? "bg-white font-semibold" : "bg-slate-50 text-slate-600"}
                           >
-                            Cancel
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="default"
-                            disabled={!queryType || !queryMessage.trim()}
-                            onClick={() => {
-                              setReviewDecision("query");
-                              setIsQueryDialogOpen(false);
-                            }}
-                          >
-                            Submit Query
-                          </Button>
-                        </div>
+                            <td className="border-t border-slate-100 px-2 py-1.5">
+                              {row.BPSIID}
+                              {row.SICategery === 69 && <span className="ml-1 text-[9px] text-slate-400">base</span>}
+                            </td>
+                            <td className="border-t border-slate-100 px-2 py-1.5 text-right">{formatAmountValue(row.Suminsured)}</td>
+                            <td className="border-t border-slate-100 px-2 py-1.5 text-right text-red-600">{formatAmountValue(row.Utilized)}</td>
+                            <td className="border-t border-slate-100 px-2 py-1.5 text-right text-orange-600">{formatAmountValue(row.Blocked)}</td>
+                            <td className="border-t border-slate-100 px-2 py-1.5 text-right text-amber-600">{formatAmountValue(row.Reserved)}</td>
+                            <td className={`border-t border-slate-100 px-2 py-1.5 text-right font-bold ${row.EffectiveBalance <= 0 ? "text-red-600" : "text-emerald-700"}`}>
+                              {formatAmountValue(row.EffectiveBalance)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Effective balance highlight */}
+                  {bsiBaseSI && (
+                    <div className={`flex items-center justify-between rounded-md px-3 py-2 ${bsiEffectiveBalance !== null && bsiEffectiveBalance > 0 ? "bg-emerald-50 border border-emerald-200" : "bg-red-50 border border-red-200"}`}>
+                      <span className="text-xs font-semibold text-slate-700">
+                        Effective SI balance available for this claim
+                      </span>
+                      <span className={`text-sm font-bold ${bsiEffectiveBalance !== null && bsiEffectiveBalance > 0 ? "text-emerald-700" : "text-red-600"}`}>
+                        {formatDisplayAmount(bsiEffectiveBalance)}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Other benefits / sub-limits */}
+                  {bsiData.OtherBenefits.length > 0 && (
+                    <div>
+                      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                        Other benefits / sub-limits
+                      </div>
+                      <div className="overflow-x-auto rounded-md border border-slate-200">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="bg-slate-100 text-slate-600">
+                              <th className="px-2 py-1 text-left">BPSI ID</th>
+                              <th className="px-2 py-1 text-right">Limit</th>
+                              <th className="px-2 py-1 text-right">Utilized</th>
+                              <th className="px-2 py-1 text-right">Balance</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {bsiData.OtherBenefits.map((ob, idx) => (
+                              <tr key={`ob-${idx}`} className="border-t border-slate-100">
+                                <td className="px-2 py-1">{ob.BPSIID}</td>
+                                <td className="px-2 py-1 text-right">{formatAmountValue(ob.Suminsured)}</td>
+                                <td className="px-2 py-1 text-right text-red-500">{formatAmountValue(ob.Utilized)}</td>
+                                <td className="px-2 py-1 text-right font-semibold text-emerald-700">{formatAmountValue(ob.EffectiveBalance)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     </div>
-                  </div>
-                ) : null}
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+        </div>
+
+        {/* Previous Claims — show whenever we have a claimId */}
+        {!!claimId && (
+          <Card className="border-2 border-indigo-200 bg-indigo-50">
+            <CardContent className="pt-4">
+              <div
+                className="flex items-center justify-between cursor-pointer"
+                onClick={() => setPrevExpanded((v) => !v)}
+              >
+                <div className="text-sm font-semibold uppercase tracking-wide text-indigo-700">
+                  Previous Claims
+                  {prevClaims.length > 0 && (
+                    <span className="ml-2 text-xs font-normal text-indigo-500">
+                      ({prevClaims.length})
+                    </span>
+                  )}
+                </div>
+                <span className="text-indigo-400 text-xs">
+                  {prevClaimsExpanded ? "▲ collapse" : "▼ expand"}
+                </span>
+              </div>
+
+              {prevClaimsExpanded && (
+                <div className="mt-3">
+                  {prevClaimsLoading && (
+                    <div className="text-xs text-indigo-500 animate-pulse">Loading previous claims...</div>
+                  )}
+                  {prevClaimsError && (
+                    <div className="text-xs text-red-500">Error: {prevClaimsError}</div>
+                  )}
+                  {similarityResult && (
+                    <div className={`text-xs rounded p-2 mb-2 ${similarityResult.isSimilar ? "bg-green-50 border border-green-200 text-green-800" : "bg-gray-50 border border-gray-200 text-gray-600"}`}>
+                      <span className="font-semibold">{similarityResult.isSimilar ? "✓ Similar to previous claim" : "✗ Not similar to previous claim"}</span>
+                      {" — "}{similarityResult.similarityReason}
+                      {similarityResult.isSimilar && similarityResult.recommendedAmount && (
+                        <span className="block mt-1 font-medium text-green-700">
+                          Recommended approval: ₹{similarityResult.recommendedAmount.toLocaleString("en-IN")} — {similarityResult.recommendationBasis}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {!prevClaimsLoading && !prevClaimsError && prevClaims.length === 0 && (
+                    <div className="text-xs text-indigo-400">No previous claims found for this policy.</div>
+                  )}
+                  {!prevClaimsLoading && prevClaims.length > 0 && (
+                    <div className="space-y-3 mt-2">
+                      {prevClaims.map((claim) => (
+                        <div
+                          key={`${claim.claimId}-${claim.slNo}`}
+                          className="rounded-md border border-indigo-200 bg-white p-3 text-xs space-y-1.5"
+                        >
+                          {/* Header row */}
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="space-y-0.5">
+                              <div className="font-semibold text-indigo-800 text-sm">
+                                {claim.diagnosis ?? "—"}
+                              </div>
+                              {claim.hospital && (
+                                <div className="text-indigo-500">{claim.hospital}</div>
+                              )}
+                            </div>
+                            <div className="text-right shrink-0">
+                              {claim.status && (
+                                <span className="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-indigo-100 text-indigo-700">
+                                  {claim.status}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Dates */}
+                          {(claim.admissionDate || claim.dischargeDate) && (
+                            <div className="text-gray-500">
+                              {claim.admissionDate && <span>Admitted: {claim.admissionDate}</span>}
+                              {claim.admissionDate && claim.dischargeDate && <span className="mx-1">→</span>}
+                              {claim.dischargeDate && <span>Discharged: {claim.dischargeDate}</span>}
+                            </div>
+                          )}
+
+                          {/* Treatment */}
+                          {claim.treatment && (
+                            <div className="text-gray-600">
+                              <span className="font-medium text-gray-700">Treatment: </span>
+                              {claim.treatment}
+                            </div>
+                          )}
+
+                          {/* Amounts */}
+                          <div className="flex items-center gap-4 pt-1 border-t border-indigo-100">
+                            {claim.billAmount != null && (
+                              <div>
+                                <span className="text-gray-500">Claimed: </span>
+                                <span className="font-semibold text-gray-800">
+                                  INR {claim.billAmount.toLocaleString("en-IN")}
+                                </span>
+                              </div>
+                            )}
+                            {claim.approvedAmount != null && (
+                              <div>
+                                <span className="text-gray-500">Approved: </span>
+                                <span className="font-semibold text-emerald-700">
+                                  INR {claim.approvedAmount.toLocaleString("en-IN")}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Approvals */}
+        <section className="space-y-6">
+          <h3 className="text-lg font-semibold text-gray-900">APPROVALS</h3>
+          <div className="rounded-md border border-gray-200 bg-gray-50 p-4 space-y-2">
+            {/* Three breakdown lines */}
+            {/* Total Medical Bill — reflects editable breakdown rows */}
+            <div className="flex items-center justify-between py-1 border-b border-gray-200">
+              <span className="text-sm text-gray-600">Total Medical Bill</span>
+              <span className="text-sm text-gray-900 font-medium">
+                {formatDisplayAmount(effectiveClaimedAmount)}
+                {hospitalInit && hospitalRows.length > 0 && (
+                  <span className="ml-1 text-[10px] text-blue-400">edited</span>
+                )}
+              </span>
+            </div>
+
+            {/* Tariff Amount — reflects editable breakdown rows */}
+            <div className="flex items-center justify-between py-1 border-b border-gray-200">
+              <span className="text-sm text-gray-600">Tariff Amount</span>
+              <span className="text-sm text-gray-900 font-medium">
+                {effectiveTariffAmount !== null ? formatDisplayAmount(effectiveTariffAmount) : "—"}
+                {tariffInit && tariffRows.length > 0 && (
+                  <span className="ml-1 text-[10px] text-blue-400">edited</span>
+                )}
+              </span>
+            </div>
+
+            {/* Benefit Plan Limit — read only */}
+            <div className="flex items-center justify-between py-1 border-b border-gray-200">
+              <span className="text-sm text-gray-600">Benefit Plan Limit</span>
+              <span className="text-sm text-gray-900">{benefitTotal !== null ? formatDisplayAmount(benefitTotal) : "—"}</span>
+            </div>
+
+            {/* Total Amount Approved — always uses editedApprovedAmount (recalculated from row totals) */}
+            <div className="flex items-center justify-between py-1">
+              <span className="text-sm font-bold text-gray-900">Total Amount Approved</span>
+              <div className="flex flex-col items-end gap-0.5">
+                {editedApprovedAmount !== null && bsiEffectiveBalance !== null &&
+                 editedApprovedAmount > bsiEffectiveBalance && (
+                  <span className="text-xs text-gray-400 line-through">
+                    {formatDisplayAmount(editedApprovedAmount)}
+                  </span>
+                )}
+                <span className="text-sm font-bold text-gray-900">
+                  {formatDisplayAmount(
+                    editedApprovedAmount !== null && bsiEffectiveBalance !== null
+                      ? Math.min(editedApprovedAmount, bsiEffectiveBalance)
+                      : editedApprovedAmount
+                  )}
+                </span>
+                {editedApprovedAmount !== null && bsiEffectiveBalance !== null &&
+                 editedApprovedAmount > bsiEffectiveBalance && (
+                  <span className="text-[10px] font-medium text-amber-600">Capped by live SI balance</span>
+                )}
               </div>
             </div>
-          ) : state?.status === "completed" && selectedFileResult ? (
-            <Card className="flex-1 overflow-y-auto">
-              <CardContent className="flex h-64 items-center justify-center text-sm text-muted-foreground">
-                No analysis data found for this file.
-              </CardContent>
-            </Card>
-          ) : (
-            <Card className="flex-1 overflow-y-auto">
-              <CardContent className="flex h-64 items-center justify-center text-sm text-muted-foreground">
-                Loading...
-              </CardContent>
-            </Card>
-          )}
-        </ResizablePanel>
+            {/* One-line explanation — uses effective (edited) values */}
+            <div className="pt-1 text-xs text-gray-500 italic">
+              {(() => {
+                const eff = effectiveClaimedAmount;
+                const tar = effectiveTariffAmount;
+                const fin = editedApprovedAmount !== null && bsiEffectiveBalance !== null
+                  ? Math.min(editedApprovedAmount, bsiEffectiveBalance)
+                  : editedApprovedAmount;
+                const parts: string[] = [];
+                if (eff !== null && tar !== null && eff > tar)
+                  parts.push(`bill (${formatDisplayAmount(eff)}) exceeds tariff (${formatDisplayAmount(tar)})`);
+                if (tar !== null && benefitTotal !== null && tar > benefitTotal)
+                  parts.push(`tariff (${formatDisplayAmount(tar)}) exceeds benefit plan limit (${formatDisplayAmount(benefitTotal)})`);
+                if (editedApprovedAmount !== null && bsiEffectiveBalance !== null &&
+                    editedApprovedAmount > bsiEffectiveBalance)
+                  parts.push(`capped by SI balance (${formatDisplayAmount(bsiEffectiveBalance)})`);
+                // If similar previous claim — override reason entirely
+                if (similarityResult?.isSimilar && similarityResult.recommendedAmount) {
+                  const prevAmt = formatDisplayAmount(similarityResult.recommendedAmount);
+                  return `Approving ${formatDisplayAmount(fin)} based on similar previous claim (${prevAmt} approved previously). ${similarityResult.recommendationBasis}`;
+                }
+                if (similarityResult?.isSimilar && similarityResult.recommendationBasis)
+                  parts.push(`Previous claim: ${similarityResult.recommendationBasis}`);
+                return parts.length
+                  ? `Approving ${formatDisplayAmount(fin)} because ${parts.join("; ")}.`
+                  : `Approving ${formatDisplayAmount(fin)} — amount is within all limits.`;
+              })()}
+            </div>
+            {/* Co-pay notice */}
+            {copayRawInfo && (
+              <div className="mt-1 text-xs text-orange-600 font-medium">
+                ⚠ {copayRawInfo} — will be reflected in the Calculate section.
+              </div>
+            )}
+          </div>
+        </section>
 
-        <ResizableHandle withHandle className="bg-slate-200/90" />
 
-        <ResizablePanel defaultSize={60} className="h-full min-w-0 overflow-hidden bg-white">
-          <PdfViewerPanel
-            activePdfFile={activePdfFile}
-            onActivePdfChange={(value) =>
-              setActivePdfFile(value as "hospital" | "tariff" | "benefitPlan")
-            }
-            hospitalBill={hospitalBill}
-            tariffFile={tariffFile}
-            claimId={state?.claimId}
-            pdfContainerRef={pdfContainerRef}
-            onPdfWidthChange={handlePdfWidthChange}
-            pdfPages={pdfPages}
-            setPdfPages={setPdfPages}
-            onDocumentLoadSuccess={onDocumentLoadSuccess}
-            onDocumentLoadError={onDocumentLoadError}
-            pdfWidth={pdfWidth}
-            pdfError={pdfError}
-            showSampleData={showSampleData}
-
-          />
-        </ResizablePanel>
-      </ResizablePanelGroup>
-    </main>
+      </CardContent>
+    </Card>
   );
 }
