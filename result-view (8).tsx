@@ -568,7 +568,14 @@ export function ResultView({
         const threshold = isExcelPdf ? 1 : Math.min(2, searchWords.length);
         console.log("[tariff-highlight] Strategy A: searchTarget=", searchTarget, "words=", searchWords, "bestHits=", bestHits, "threshold=", threshold, "bestSpan text=", bestSpan?.textContent);
         if (bestSpan && bestHits >= threshold) {
-          highlightLine(getSpanTopPx(bestSpan)!);
+          // For rotated text (Excel PDFs), highlight only the exact span — not the whole line
+          const spanStyle = bestSpan.getAttribute("style") || "";
+          const isRotated = spanStyle.includes("rotate(-90deg)") || spanStyle.includes("rotate(90deg)");
+          if (isRotated) {
+            applyHighlight(bestSpan);
+          } else {
+            highlightLine(getSpanTopPx(bestSpan)!);
+          }
           pendingHighlightRef.current = null;
           return;
         }
