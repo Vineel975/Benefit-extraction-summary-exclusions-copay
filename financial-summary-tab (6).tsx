@@ -265,6 +265,19 @@ export function FinancialSummaryTab({
 
         // ── Extract CoPay from condition groups ───────────────────────────
         const copayLines: string[] = [];
+        // Debug: find General Copay parent ID
+        let _generalCopayId: number | null = null;
+        conditions.forEach((row) => {
+          const id = parseId(getF(row, ["ID"]));
+          const name = asT(getF(row, ["Name"]));
+          if (name === "General Copay" && id) { _generalCopayId = id; }
+        });
+        console.log("[ClaimAI] General Copay condition ID:", _generalCopayId);
+        // Also check ruleConfigs directly linked to General Copay
+        if (_generalCopayId) {
+          const directRules = ruleConfigs.filter(r => parseId(getF(r, ["BPConditionID"])) === _generalCopayId);
+          console.log("[ClaimAI] General Copay direct rules count:", directRules.length, directRules.map(r => ({ cop: getF(r, ["CopayValue"]), perc: getF(r, ["CopayPerc"]), rem: getF(r, ["Remarks"]) })));
+        }
         conditions.forEach((row) => {
           const parentId = parseId(getF(row, ["ParentID"]));
           if (!parentId) return;
