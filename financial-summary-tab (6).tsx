@@ -279,8 +279,12 @@ export function FinancialSummaryTab({
             if (remarks)   parts.push(remarks);
             if (parts.length) {
               copayLines.push(parts.join(" | "));
-              // Store concise display string e.g. "10% Co-pay applicable"
-              const display = copayPerc ? `${copayPerc}% co-pay applicable` : copayVal ? `Co-pay: ₹${copayVal}` : null;
+              // Store concise display string — prefer remarks (already human-readable), then percent, then value
+              const display = remarks
+                ? remarks
+                : copayPerc ? `${copayPerc}% co-pay applicable`
+                : copayVal  ? `${copayVal}% co-pay applicable`
+                : null;
               if (display && !cancelled) setCopayRawInfo(display);
             }
           });
