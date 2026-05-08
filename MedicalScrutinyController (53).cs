@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Web;
@@ -8118,8 +8118,8 @@ namespace Enrollment.Controllers
                 {
                     var workbook = new ClosedXML.Excel.XLWorkbook(excelStream);
 
-                    // Use A4 landscape for wide tariff tables
-                    var pageSize = iTextSharp.text.PageSize.A4.Rotate();
+                    // Use A4 portrait — landscape causes text rotation issues in react-pdf
+                    var pageSize = iTextSharp.text.PageSize.A4;
                     var document = new iTextSharp.text.Document(pageSize, 20f, 20f, 20f, 20f);
                     iTextSharp.text.pdf.PdfWriter.GetInstance(document, pdfStream);
                     document.Open();
