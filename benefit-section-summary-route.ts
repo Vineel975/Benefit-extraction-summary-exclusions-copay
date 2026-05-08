@@ -6,7 +6,7 @@ import { getModel } from "@/src/model-provider";
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as {
-      section?: "exclusions" | "copay";
+      section?: "ailment" | "exclusions" | "copay";
       rawText?: string;
     };
 
