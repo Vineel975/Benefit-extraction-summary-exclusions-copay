@@ -358,17 +358,18 @@ Return ONLY a valid JSON object with no extra text:
 `;
 
 export const benefitSectionSummaryPrompt = (
-  section: "exclusions" | "copay",
+  section: "ailment" | "exclusions" | "copay",
   rawText: string,
 ): string => `
 You are summarizing benefit plan information for a health insurance claim processor.
 
-SECTION: ${section === "exclusions" ? "Exclusions" : "Co-Pay"}
+SECTION: ${section === "ailment" ? "Ailment Cappings" : section === "exclusions" ? "Exclusions" : "Co-Pay"}
 
 RAW DATA:
 ${rawText}
 
 Provide a concise plain-English summary (2-4 sentences maximum) of the key points relevant to a claim processor.
+- For ailment cappings: summarize the monetary limits and conditions for each ailment.
 - For exclusions: list what is NOT covered or has waiting periods.
 - For copay: state the co-pay percentage or amount and when it applies.
 - Be specific with numbers/percentages where present.
