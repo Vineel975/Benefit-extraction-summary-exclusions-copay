@@ -263,40 +263,21 @@ export function FinancialSummaryTab({
           }).catch(() => {});
         }
 
-        // ── Extract CoPay from condition groups ───────────────────────────
+        // ── Extract CoPay — rules linked directly to "General Copay" condition ─
         const copayLines: string[] = [];
-        // Debug: find General Copay parent ID
-        let _generalCopayId: number | null = null;
         conditions.forEach((row) => {
-          const id = parseId(getF(row, ["ID"]));
+          const id   = parseId(getF(row, ["ID"]));
           const name = asT(getF(row, ["Name"]));
-          if (name === "General Copay" && id) { _generalCopayId = id; }
-        });
-        console.log("[ClaimAI] General Copay condition ID:", _generalCopayId);
-        // Also check ruleConfigs directly linked to General Copay
-        if (_generalCopayId) {
-          const directRules = ruleConfigs.filter(r => parseId(getF(r, ["BPConditionID"])) === _generalCopayId);
-          console.log("[ClaimAI] General Copay direct rules count:", directRules.length, directRules.map(r => ({ cop: getF(r, ["CopayValue"]), perc: getF(r, ["CopayPerc"]), rem: getF(r, ["Remarks"]) })));
-        }
-        conditions.forEach((row) => {
-          const parentId = parseId(getF(row, ["ParentID"]));
-          if (!parentId) return;
-          const parent = condById.get(parentId);
-          if (!parent) return;
-          const parentName = asT(getF(parent, ["Name"]));
-          if (parentName !== "General Copay") return;
-          const condId = parseId(getF(row, ["ID"]));
-          if (!condId) return;
-          const condName = asT(getF(row, ["Name"]));
-          ruleConfigs.filter(r => parseId(getF(r, ["BPConditionID"])) === condId).forEach(rule => {
+          if (name !== "General Copay" || !id) return;
+          ruleConfigs.filter(r => parseId(getF(r, ["BPConditionID"])) === id).forEach(rule => {
             const parts: string[] = [];
             const copayVal  = asT(getF(rule, ["CopayValue"]));
             const copayPerc = asT(getF(rule, ["CopayPerc"]));
             const remarks   = asT(getF(rule, ["Remarks"]));
-            if (copayVal)  parts.push(`Amount: ${copayVal}`);
-            if (copayPerc) parts.push(`Percent: ${copayPerc}%`);
-            if (remarks)   parts.push(`Remarks: ${remarks}`);
-            if (parts.length) copayLines.push(`${condName}: ${parts.join(" | ")}`);
+            if (copayVal)  parts.push(`Co-pay Amount: ${copayVal}`);
+            if (copayPerc) parts.push(`Co-pay Percent: ${copayPerc}%`);
+            if (remarks)   parts.push(remarks);
+            if (parts.length) copayLines.push(parts.join(" | "));
           });
         });
         if (copayLines.length > 0) {
