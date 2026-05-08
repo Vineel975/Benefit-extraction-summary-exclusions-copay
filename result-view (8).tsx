@@ -550,9 +550,9 @@ export function ResultView({
     ));
     console.log("[tariff-highlight] isExcelPdf=", isExcelPdf, "tariffFileName=", tariffFileNameProp);
 
-    // STRATEGY A: pdfText direct search via DOM spans (text-based PDFs)
-    // For Excel-converted PDFs, also try matching by highlightName (procedure name)
-    const searchTarget = highlightText || highlightName || "";
+    // STRATEGY A: text search via DOM spans — works for all PDFs with embedded text
+    // Use highlightName first (more specific), fall back to highlightText
+    const searchTarget = highlightName || highlightText || "";
     if (searchTarget && searchTarget.length > 3) {
       const searchWords = normalize(searchTarget).split(" ").filter(w => w.length > 3);
       if (searchWords.length > 0) {
@@ -564,11 +564,10 @@ export function ResultView({
           const hits = searchWords.filter(w => t.includes(w)).length;
           if (hits > bestHits) { bestHits = hits; bestSpan = span; }
         }
-        // Lower threshold for Excel PDFs — 1 strong keyword match is enough
+        // Threshold: 1 hit for Excel/short names, 2 for regular PDFs
         const threshold = isExcelPdf ? 1 : Math.min(2, searchWords.length);
         console.log("[tariff-highlight] Strategy A: searchTarget=", searchTarget, "words=", searchWords, "bestHits=", bestHits, "threshold=", threshold, "bestSpan text=", bestSpan?.textContent);
         if (bestSpan && bestHits >= threshold) {
-          // For rotated text (Excel PDFs), highlight only the exact span — not the whole line
           const spanStyle = bestSpan.getAttribute("style") || "";
           const isRotated = spanStyle.includes("rotate(-90deg)") || spanStyle.includes("rotate(90deg)");
           if (isRotated) {
@@ -582,9 +581,8 @@ export function ResultView({
       }
     }
 
-    // STRATEGY B: use AI-provided row coordinates (pdfRowTopPct/pdfRowBottomPct) to draw
-    // a canvas overlay. This works for scanned PDFs with no embedded text.
-    // Skip for Excel-converted PDFs — they have proper text layers, use Strategy A instead.
+    // STRATEGY B: AI-provided row coordinates — only for scanned PDFs with no text layer
+    // (Strategy A above handles all text-based PDFs including Excel-converted ones)
     if (!isExcelPdf && rowTopPct && rowBottomPct && rowTopPct > 0) {
       console.log("[tariff-highlight] Strategy B: using AI coordinates", rowTopPct, rowBottomPct);
       const canvas = targetWrapper.querySelector("canvas") as HTMLCanvasElement | null;
