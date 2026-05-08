@@ -277,7 +277,12 @@ export function FinancialSummaryTab({
             if (copayVal)  parts.push(`Co-pay Amount: ${copayVal}`);
             if (copayPerc) parts.push(`Co-pay Percent: ${copayPerc}%`);
             if (remarks)   parts.push(remarks);
-            if (parts.length) copayLines.push(parts.join(" | "));
+            if (parts.length) {
+              copayLines.push(parts.join(" | "));
+              // Store concise display string e.g. "10% Co-pay applicable"
+              const display = copayPerc ? `${copayPerc}% co-pay applicable` : copayVal ? `Co-pay: ₹${copayVal}` : null;
+              if (display && !cancelled) setCopayRawInfo(display);
+            }
           });
         });
         if (copayLines.length > 0) {
@@ -422,6 +427,7 @@ export function FinancialSummaryTab({
   const [prevClaimsError, setPrevError]   = useState<string | null>(null);
   const [prevClaimsExpanded, setPrevExpanded] = useState(false);
   const [ailmentSummary,    setAilmentSummary]    = useState<string | null>(null);
+  const [copayRawInfo,      setCopayRawInfo]      = useState<string | null>(null);
   const [exclusionsSummary, setExclusionsSummary] = useState<string | null>(null);
   const [copaySummary,      setCopaySummary]      = useState<string | null>(null);
   const [similarityResult, setSimilarityResult] = useState<{
@@ -1123,6 +1129,12 @@ export function FinancialSummaryTab({
                   : `Approving ${formatDisplayAmount(fin)} — amount is within all limits.`;
               })()}
             </div>
+            {/* Co-pay notice */}
+            {copayRawInfo && (
+              <div className="mt-1 text-xs text-orange-600 font-medium">
+                ⚠ {copayRawInfo} — will be reflected in the Calculate section.
+              </div>
+            )}
           </div>
         </section>
 
