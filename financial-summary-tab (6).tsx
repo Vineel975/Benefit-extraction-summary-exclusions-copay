@@ -187,6 +187,8 @@ export function FinancialSummaryTab({
           if (!parentId) return;
           const parent = condById.get(parentId);
           if (!parent) return;
+          // Only Ailment Conditions group for Ailment Cappings
+          if (asT(getF(parent, ["Name"])) !== "Ailment Conditions") return;
 
           const condId = parseId(getF(row, ["ID"]));
           if (!condId) return;
@@ -216,20 +218,46 @@ export function FinancialSummaryTab({
         if (cancelled) return;
         setAlignmentCappings(allCaps.length > 0 ? allCaps : []);
 
-        // ── Extract Exclusions from remarks ───────────────────────────────
-        const exclusionRows: Row[] = ((snap as { remarks?: { exclusions?: Row[] } })
-          .remarks?.exclusions) ?? [];
-        if (exclusionRows.length > 0) {
-          const exclusionText = exclusionRows.map((row) =>
-            Object.entries(row)
-              .filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== "")
-              .map(([k, v]) => `${k}: ${v}`)
-              .join(" | ")
-          ).join("\n");
+        // ── AI summary for Ailment Cappings ──────────────────────────────
+        if (allCaps.length > 0) {
           fetch("/api/benefit-section-summary", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ section: "exclusions", rawText: exclusionText }),
+            body: JSON.stringify({ section: "ailment", rawText: allCaps.join("\n") }),
+          }).then(r => r.json()).then((d: { summary?: string }) => {
+            if (!cancelled && d.summary) setAilmentSummary(d.summary);
+          }).catch(() => {});
+        }
+
+        // ── Extract Exclusions from condition groups ─────────────────────
+        const exclusionLines: string[] = [];
+        conditions.forEach((row) => {
+          const parentId = parseId(getF(row, ["ParentID"]));
+          if (!parentId) return;
+          const parent = condById.get(parentId);
+          if (!parent) return;
+          const pName = asT(getF(parent, ["Name"]));
+          if (pName !== "Exclusions" && pName !== "Exceptions") return;
+          const condId = parseId(getF(row, ["ID"]));
+          if (!condId) return;
+          const condName = asT(getF(row, ["Name"]));
+          ruleConfigs.filter(r => parseId(getF(r, ["BPConditionID"])) === condId).forEach(rule => {
+            const remarks = asT(getF(rule, ["Remarks"]));
+            const lim1 = describeLimit("Individual Limit", getF(rule, ["IndividualLimit"]), getF(rule, ["IndividualPerc"]));
+            const parts = [remarks, lim1].filter(Boolean);
+            if (parts.length) exclusionLines.push(`${condName}: ${parts.join(" | ")}`);
+            else exclusionLines.push(condName);
+          });
+          // Include condition even if no rules — the name itself is the exclusion
+          if (ruleConfigs.filter(r => parseId(getF(r, ["BPConditionID"])) === condId).length === 0) {
+            exclusionLines.push(condName);
+          }
+        });
+        if (exclusionLines.length > 0) {
+          fetch("/api/benefit-section-summary", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ section: "exclusions", rawText: exclusionLines.join("\n") }),
           }).then(r => r.json()).then((d: { summary?: string }) => {
             if (!cancelled && d.summary) setExclusionsSummary(d.summary);
           }).catch(() => {});
@@ -242,8 +270,8 @@ export function FinancialSummaryTab({
           if (!parentId) return;
           const parent = condById.get(parentId);
           if (!parent) return;
-          const parentName = asT(getF(parent, ["Name"])).toLowerCase();
-          if (!parentName.includes("copay") && !parentName.includes("co-pay") && !parentName.includes("co pay")) return;
+          const parentName = asT(getF(parent, ["Name"]));
+          if (parentName !== "General Copay") return;
           const condId = parseId(getF(row, ["ID"]));
           if (!condId) return;
           const condName = asT(getF(row, ["Name"]));
@@ -399,6 +427,7 @@ export function FinancialSummaryTab({
   const [prevClaimsLoading, setPrevLoading] = useState(false);
   const [prevClaimsError, setPrevError]   = useState<string | null>(null);
   const [prevClaimsExpanded, setPrevExpanded] = useState(false);
+  const [ailmentSummary,    setAilmentSummary]    = useState<string | null>(null);
   const [exclusionsSummary, setExclusionsSummary] = useState<string | null>(null);
   const [copaySummary,      setCopaySummary]      = useState<string | null>(null);
   const [similarityResult, setSimilarityResult] = useState<{
@@ -759,18 +788,12 @@ export function FinancialSummaryTab({
               <div className="space-y-2">
 
                 {/* 1. Ailment Cappings */}
-                {alignmentCappings.length > 0 && (
+                {(ailmentSummary || alignmentCappings.length > 0) && (
                   <div className="rounded border border-blue-100 bg-blue-50 p-2">
                     <div className="text-xs font-semibold text-blue-700 mb-1">Ailment Cappings</div>
-                    <ul className="space-y-0.5 list-disc list-inside">
-                      {alignmentCappings.map((cap, i) => {
-                        const colonIdx = cap.indexOf(": ");
-                        const text = colonIdx !== -1 ? cap.slice(colonIdx + 2) : cap;
-                        return (
-                          <li key={i} className="text-xs text-gray-700">{text}</li>
-                        );
-                      })}
-                    </ul>
+                    <p className="text-xs text-gray-700">
+                      {ailmentSummary ?? "Loading summary..."}
+                    </p>
                   </div>
                 )}
 
@@ -791,7 +814,7 @@ export function FinancialSummaryTab({
                 )}
 
                 {/* Empty state */}
-                {alignmentCappings.length === 0 && !exclusionsSummary && !copaySummary && (
+                {alignmentCappings.length === 0 && !ailmentSummary && !exclusionsSummary && !copaySummary && (
                   <p className="text-xs text-muted-foreground italic">No benefit extraction data available.</p>
                 )}
 
