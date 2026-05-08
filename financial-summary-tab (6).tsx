@@ -169,6 +169,16 @@ export function FinancialSummaryTab({
           if (id !== null) condById.set(id, row);
         });
 
+        // Log all parent group names so we know exact names from DB
+        const _parentNames = new Set<string>();
+        conditions.forEach((row) => {
+          const _pid = parseId(getF(row, ["ParentID"]));
+          if (!_pid) return;
+          const _par = condById.get(_pid);
+          if (_par) _parentNames.add(asT(getF(_par, ["Name"])));
+        });
+        console.log("[ClaimAI] Benefit plan parent group names:", Array.from(_parentNames));
+
         const allCaps: string[] = [];
         const seen = new Set<string>();
 
