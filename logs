@@ -1,2 +1,8 @@
-[ClaimAI] General Copay condition ID: 8
-financial-summary-tab.tsx:279 [ClaimAI] General Copay direct rules count: 1 [{…}]0: cop: 10perc: nullrem: "10% copay is applicable on all parental claims."[[Prototype]]: Objectlength: 1[[Prototype]]: Array(0)
+[tariff-highlight] scheduling runHighlight, page= 12 text= PHACOEMULSIFICATION WITH TORIC IOL IMPLANTATION name= undefined
+result-view.tsx:775 [tariff-highlight] setTimeout fired, calling runHighlight
+result-view.tsx:433 [tariff-highlight] runHighlight called, req= {pageNumber: 12, highlightText: 'PHACOEMULSIFICATION WITH TORIC IOL IMPLANTATION', highlightName: undefined, rowTopPct: 26, rowBottomPct: 28} pdfContainerRef= true
+result-view.tsx:461 [tariff-highlight] wrappers found= 54 innerHTML snippet= <div class="react-pdf__Document"><div class="flex flex-col items-center gap-4 w-full overflow-x-auto"><div data-page-number="1" class="border-b border-gray-200 pb-4 last:border-b-0 flex justify-center" style="max-width: 100%;"><div class="react-pdf__Page max-w-full" data-page-number="1" style="--sca
+result-view.tsx:498 [tariff-highlight] targetWrapper found, textLayer= true spans= 68
+result-view.tsx:521 [tariff-highlight] positionedSpans= 68 of 68 sample span style= left: 4.48%; top: 97.03%; font-size: calc(var(--total-scale-factor) *9.00px); font-family: sans-serif; transform: rotate(-90deg) scaleX(1.00641); sample text= MICRO INCISION COAXIAL PHACOEM
+result-view.tsx:551 [tariff-highlight] isExcelPdf= true tariffFileName= 7006-Narayana Nethralaya Bengaluru KA ( 15-APRIL-2024 ).xlsx
+result-view.tsx:569 [tariff-highlight] Strategy A: searchTarget= PHACOEMULSIFICATION WITH TORIC IOL IMPLANTATION words= (4) ['phacoemulsification', 'with', 'toric', 'implantation'] bestHits= 4 threshold= 1 bestSpan text= PHACOEMULSIFICATION WITH TORIC IOL IMPLANTATION
